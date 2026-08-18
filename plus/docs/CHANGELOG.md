@@ -29,4 +29,5 @@
   - 列表视图:原生 header factory 整行组头;图标视图:**每个分组项图标中央显示分组名徽章**(GtkGridView 无 section 感知、无法让分组另起一行——源码级确认;徽章半透明黑底白字+描边,按文件夹图标形状居中,`can-target: false` 点击穿透)
   - Python 测试驱动:`archived: true`(严格布尔)→ `group` 扩展属性 `已归档`;**分组与 name-zh 开关解耦**(开关只控制中文名)
   - 构建验证通过(2026-08-19);扩展安装 `~/.local/share/nautilus-python/extensions/` 实测加载正常
+- **列表视图中文项目名(2026-08-19)**:`nautilus-name-cell` 名称单元格在英文 `display-name` 后追加 `name-zh` 中文名 label,样式沿用网格视图 caption 的 `caption + dim-label`(同一颜色);`file-changed`/bind 时随 `update_labels` 刷新,无中文名时隐藏
 - 扩展重组(后续):改名 `nautilus-meta.py`(菜单 ID、配置目录同步),纳入 `plus/extensions/python/`
