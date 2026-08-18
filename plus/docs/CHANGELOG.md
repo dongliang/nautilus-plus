@@ -18,6 +18,6 @@
 
 ## 0.2.0 — 计划中
 
-- fork C 钩子:显示名覆盖(`PROP_DISPLAY_NAME` getter 读扩展属性 `name`,约 10 行,零新 ABI)
+- **决策(2026-08-17)**:显示名覆盖钩子**已否决**——底部 caption 方案更优(理由:心智一致性/零 fork 成本/信息更全/无边界怪癖,详见 `research.md` 第 1 节)。fork 唯一动机 = **分组视图**
 - 扩展重组:改名 `nautilus-meta.py`(菜单 ID、配置目录同步),纳入 `plus/extensions/python/`
-- 归档标记/分组机制按 `research.md` 蓝图评估
+- 分组机制按 `research.md` 第 2 节蓝图评估(唯一剩余的 fork 钩子)
