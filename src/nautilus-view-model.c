@@ -515,10 +515,22 @@ void
 nautilus_view_model_sort (NautilusViewModel *self)
 {
     GtkSorter *sorter = nautilus_view_model_get_sorter (self);
+    guint n_items;
 
     if (sorter != NULL)
     {
         gtk_sorter_changed (sorter, GTK_SORTER_CHANGE_DIFFERENT);
+    }
+
+    /* GtkSortListModel emits no items-changed at all when a re-sort leaves
+     * positions unchanged, even though section membership may have changed
+     * (e.g. extension group attributes arrived without changing the order).
+     * Emit a full-range sections-changed so consumers re-derive section
+     * boundaries and refresh group headers. */
+    n_items = g_list_model_get_n_items (G_LIST_MODEL (self));
+    if (n_items > 0)
+    {
+        gtk_section_model_sections_changed (GTK_SECTION_MODEL (self), 0, n_items);
     }
 }
 

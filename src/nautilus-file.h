@@ -362,6 +362,12 @@ char *                  nautilus_file_get_string_attribute              (Nautilu
 									 const char                     *attribute_name);
 char *                  nautilus_file_get_string_attribute_q            (NautilusFile                   *file,
 									 GQuark                          attribute_q);
+/* Only extension attributes, bypassing built-in attributes. Some built-in
+ * attribute names (e.g. "group" = POSIX group name) shadow the extension
+ * attribute table in nautilus_file_get_string_attribute_q, so hooks which
+ * must read exactly what extensions wrote need this accessor. */
+char *                  nautilus_file_get_extension_attribute            (NautilusFile                   *file,
+									 GQuark                          attribute_q);
 char *                  nautilus_file_get_string_attribute_with_default (NautilusFile                   *file,
 									 const char                     *attribute_name);
 char *                  nautilus_file_get_string_attribute_with_default_q (NautilusFile                  *file,

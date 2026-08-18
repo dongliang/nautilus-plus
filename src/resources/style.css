@@ -389,3 +389,18 @@ rubberband {
 .toolbar.no-bottom-padding {
   padding-bottom: 0px;
 }
+
+/* Group badge: group name overlaid on the icon of grouped items in the
+ * grid view. Fork feature (grouped view); overlay label defined in
+ * nautilus-grid-cell.blp. Fixed dark background so it reads on both
+ * light and dark themes. */
+.nautilus-view-cell .group-badge {
+  background: alpha(#000000, 0.4);
+  color: white;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-weight: 700;
+  font-size: 1.1em;
+  text-shadow: 1px 0 alpha(#000000, 0.5), -1px 0 alpha(#000000, 0.5),
+               0 1px alpha(#000000, 0.5), 0 -1px alpha(#000000, 0.5);
+}

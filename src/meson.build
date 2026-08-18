@@ -116,6 +116,8 @@ libnautilus_sources = [
   'nautilus-freedesktop-dbus.h',
   'nautilus-global-preferences.c',
   'nautilus-global-preferences.h',
+  'nautilus-grouped-view.c',
+  'nautilus-grouped-view.h',
   'nautilus-grid-cell.c',
   'nautilus-grid-cell.h',
   'nautilus-grid-view.c',

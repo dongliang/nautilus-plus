@@ -20,6 +20,7 @@
 #include "nautilus-file.h"
 #include "nautilus-file-utilities.h"
 #include "nautilus-global-preferences.h"
+#include "nautilus-grouped-view.h"
 #include "nautilus-label-cell.h"
 #include "nautilus-metadata.h"
 #include "nautilus-name-cell.h"
@@ -358,17 +359,60 @@ setup_row (GtkSignalListItemFactory *factory,
     gtk_expression_bind (expression, columnviewrow, "accessible-label", columnviewrow);
 }
 
+static void
+setup_group_header (GtkSignalListItemFactory *factory,
+                    GtkListHeader            *listheader,
+                    gpointer                  user_data)
+{
+    GtkWidget *label = gtk_label_new (NULL);
+
+    gtk_widget_add_css_class (label, "heading");
+    gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+
+    gtk_list_header_set_child (listheader, label);
+}
+
+static void
+bind_group_header (GtkSignalListItemFactory *factory,
+                   GtkListHeader            *listheader,
+                   gpointer                  user_data)
+{
+    GtkWidget *label = gtk_list_header_get_child (listheader);
+    GtkTreeListRow *row = GTK_TREE_LIST_ROW (gtk_list_header_get_item (listheader));
+    g_autoptr (NautilusViewItem) item = NAUTILUS_VIEW_ITEM (gtk_tree_list_row_get_item (row));
+    g_autofree char *group = NULL;
+
+    group = nautilus_grouped_view_get_group_string (nautilus_view_item_get_file (item));
+
+    if (group == NULL || group[0] == '\0')
+    {
+        /* Ungrouped section: no header. An invisible child makes the header
+         * measure zero height. */
+        gtk_widget_set_visible (label, FALSE);
+    }
+    else
+    {
+        gtk_label_set_label (GTK_LABEL (label), group);
+        gtk_widget_set_visible (label, TRUE);
+    }
+}
+
 static GtkColumnView *
 create_view_ui (NautilusListView *self)
 {
     GtkWidget *widget;
     g_autoptr (GtkListItemFactory) row_factory = gtk_signal_list_item_factory_new ();
+    g_autoptr (GtkListItemFactory) header_factory = gtk_signal_list_item_factory_new ();
 
     widget = gtk_column_view_new (NULL);
 
     gtk_widget_set_hexpand (widget, TRUE);
 
     g_signal_connect (row_factory, "setup", G_CALLBACK (setup_row), self);
+
+    g_signal_connect (header_factory, "setup", G_CALLBACK (setup_group_header), self);
+    g_signal_connect (header_factory, "bind", G_CALLBACK (bind_group_header), self);
+    gtk_column_view_set_header_factory (GTK_COLUMN_VIEW (widget), header_factory);
 
     /* We don't use the built-in child activation feature for click because it
      * doesn't fill all our needs nor does it match our expected behavior.
@@ -1079,13 +1123,19 @@ on_model_changed (NautilusListView *self)
         g_autoptr (GtkMultiSorter) sorter = gtk_multi_sorter_new ();
         GtkSorter *column_view_sorter = gtk_column_view_get_sorter (self->view_ui);
         g_autoptr (GtkCustomSorter) directories_sorter = NULL;
+        g_autoptr (GtkSorter) section_sorter = NULL;
 
         directories_sorter = gtk_custom_sorter_new (sort_directories_func, &self->directories_first, NULL);
+        /* Group partition first, then directories-first, then the column sort. */
+        gtk_multi_sorter_append (sorter, nautilus_grouped_view_create_group_sorter ());
         gtk_multi_sorter_append (sorter, g_object_ref (GTK_SORTER (directories_sorter)));
         gtk_multi_sorter_append (sorter, g_object_ref (column_view_sorter));
         g_set_object (&self->view_model_sorter, GTK_SORTER (sorter));
 
         nautilus_view_model_set_sorter (model, self->view_model_sorter);
+
+        section_sorter = nautilus_grouped_view_create_section_sorter ();
+        nautilus_view_model_set_section_sorter (model, section_sorter);
 
         nautilus_view_model_expand_as_a_tree (model, self->expand_as_a_tree);
 

@@ -8,6 +8,13 @@ icon view. The real folder name (and path) is never changed, and normal
 renaming (F2) is unaffected — edit `.project.yaml` to change the Chinese
 name.
 
+The extension also drives the fork's grouped view: a folder whose
+`.project.yaml` has `archived: true` (strictly the YAML boolean true) gets
+the `group` extension attribute "已归档", which the fork's C sorters use to
+partition the view — archived folders form a trailing "已归档" group with a
+header, ungrouped items stay in front without one. Grouping is independent
+of the switch below (it only controls the Chinese captions).
+
 A global on/off switch lives in the background context menu (right-click
 empty space in a folder). Toggling takes effect immediately, and the menu
 label flips to match within a moment. The switch state is stored in
@@ -33,16 +40,21 @@ CAPTIONS_BACKUP = os.path.join(CONFIG_DIR, 'captions-backup.json')
 ICON_VIEW_SCHEMA = 'org.gnome.nautilus.icon-view'
 CAPTIONS_KEY = 'captions'
 ATTR = 'name-zh'
+GROUP_ATTR = 'group'
+ARCHIVED_LABEL = '已归档'
 YAML_NAME = '.project.yaml'
 YAML_MAX_SIZE = 1024 * 1024
 
 _settings = Gio.Settings.new(ICON_VIEW_SCHEMA)
 
-# folder_path -> (mtime, name_zh | None)
-_name_cache = {}
+# folder_path -> (mtime, name_zh | None, archived: bool)
+_yaml_cache = {}
 # folders we ever showed a Chinese name for; the source of truth for
 # clearing stale captions (yaml deleted / key removed / switch off)
 _shown = set()
+# folders we ever marked as grouped (archived); the source of truth for
+# clearing the group attribute when it no longer applies
+_grouped = set()
 # (mtime, enabled)
 _state_cache = (None, None)
 
@@ -81,18 +93,19 @@ def _atomic_write(path, text):
 
 # --- .project.yaml --------------------------------------------------------
 
-def _name_zh(folder_path):
-    """name-zh from the folder's .project.yaml, or None. Cached by mtime."""
+def _yaml_info(folder_path):
+    """(name-zh, archived) from the folder's .project.yaml. Cached by mtime."""
     yaml_path = os.path.join(folder_path, YAML_NAME)
     try:
         mtime = os.path.getmtime(yaml_path)
     except OSError:
-        _name_cache.pop(folder_path, None)
-        return None
-    hit = _name_cache.get(folder_path)
+        _yaml_cache.pop(folder_path, None)
+        return (None, False)
+    hit = _yaml_cache.get(folder_path)
     if hit is not None and hit[0] == mtime:
-        return hit[1]
+        return (hit[1], hit[2])
     name = None
+    archived = False
     try:
         if os.path.getsize(yaml_path) <= YAML_MAX_SIZE:
             with open(yaml_path, encoding='utf-8') as f:
@@ -101,12 +114,16 @@ def _name_zh(folder_path):
                 value = data.get('name-zh')
                 if isinstance(value, str) and value.strip():
                     name = value.strip()
+                # Strict: only the YAML boolean true marks a folder archived.
+                # (PyYAML is YAML 1.1, so yes/on also parse as True — the
+                # .project.yaml convention is to write true/false only.)
+                archived = data.get('archived') is True
     except (yaml.YAMLError, UnicodeDecodeError, OSError, ValueError):
         pass
-    _name_cache[folder_path] = (mtime, name)
-    if len(_name_cache) > 1024:
-        _name_cache.pop(next(iter(_name_cache)))
-    return name
+    _yaml_cache[folder_path] = (mtime, name, archived)
+    if len(_yaml_cache) > 1024:
+        _yaml_cache.pop(next(iter(_yaml_cache)))
+    return (name, archived)
 
 
 # --- icon-view captions ---------------------------------------------------
@@ -165,7 +182,11 @@ def _sync_captions(enabled):
 # --- applying the name ----------------------------------------------------
 
 def _apply(file):
-    """Set/clear the name-zh extension attribute for one file."""
+    """Set/clear the name-zh and group extension attributes for one file.
+
+    The group attribute is independent of the on/off switch: the switch only
+    controls the Chinese captions. Archived folders are always grouped.
+    """
     if not file.is_directory():
         return
     uri = file.get_uri()
@@ -175,14 +196,22 @@ def _apply(file):
         folder = GLib.filename_from_uri(uri)[0]
     except GLib.Error:
         return
-    name = _name_zh(folder) if _enabled() else None
-    if name:
+    name, archived = _yaml_info(folder)
+
+    if _enabled() and name:
         file.add_string_attribute(ATTR, name)
         _shown.add(folder)
     elif folder in _shown:
         # Extension attributes have no removal: an empty value clears the
         # line. Needed when name-zh is removed or the switch is turned off.
         file.add_string_attribute(ATTR, '')
+
+    if archived is True:
+        file.add_string_attribute(GROUP_ATTR, ARCHIVED_LABEL)
+        _grouped.add(folder)
+    elif folder in _grouped:
+        file.add_string_attribute(GROUP_ATTR, '')
+        _grouped.discard(folder)
 
 
 def _refresh_folder(folder):

@@ -9,6 +9,7 @@
 #include "nautilus-file.h"
 #include "nautilus-global-preferences.h"
 #include "nautilus-grid-cell.h"
+#include "nautilus-grouped-view.h"
 #include "nautilus-list-base-private.h"
 #include "nautilus-view-cell.h"
 #include "nautilus-view-item.h"
@@ -383,7 +384,8 @@ real_set_sort_state (NautilusListBase *list_base,
     self->sort_attribute = g_quark_from_string (target_name);
 
     sorter = gtk_custom_sorter_new (nautilus_grid_view_sort, self, NULL);
-    nautilus_view_model_set_sorter (model, GTK_SORTER (sorter));
+    nautilus_view_model_set_sorter (model,
+                                    nautilus_grouped_view_create_sorter (GTK_SORTER (sorter)));
 }
 
 static void
