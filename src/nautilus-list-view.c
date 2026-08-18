@@ -368,6 +368,7 @@ setup_group_header (GtkSignalListItemFactory *factory,
 
     gtk_widget_add_css_class (label, "heading");
     gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+    gtk_widget_set_margin_start (label, 8);
 
     gtk_list_header_set_child (listheader, label);
 }

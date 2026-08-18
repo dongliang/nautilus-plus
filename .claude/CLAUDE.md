@@ -29,3 +29,12 @@ nautilus(GNOME Files)的定制 fork。上游 C 代码 + `plus/` 目录存放全�
 - **C 改动**:标准 meson 构建(上游约定);`upstream` 远端(GNOME/nautilus)供参考;fork 专属内容只放 `plus/`,不碰上游目录(`docs/`、`extensions/` 是上游的)
 - 新功能先写设计文档(`plus/docs/design/`)再动代码
 - 环境:nautilus 50.x + nautilus-python 4.1,GI 版本号 `4.1`,依赖 PyYAML
+
+## 每个开发任务的验收环节(必做)
+
+任何 C/Python 改动完成后,必须构建并打开 `plus/dev-demo/` 人工验收:
+
+1. **构建**:`meson setup build --prefix=/usr -Ddocs=false && ninja -C build`(prefix 必须为 /usr,见 pitfalls.md 第 12 条;已配置时 `ninja -C build` 增量即可)
+2. **打开**:`build/src/nautilus plus/dev-demo`(先 `nautilus -q` 退出系统实例,避免干扰)
+3. **验收内容**:`plus/dev-demo/` 内容与 `/tmp/opencode/demo` 一致——`alpha-project`(name-zh + archived)、`beta-project`(仅 name-zh)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`(普通文件);分别用图标视图和列表视图检查分组/中文名显示效果
+4. 验收后如无遗留需求可退出窗口,不强制清理
