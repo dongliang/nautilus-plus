@@ -69,6 +69,7 @@
 - **钩子抽象**:钩子只认"扩展属性 = 值",不认写属性者——为将来 C 原生读 `.project.yaml` 留迁移路径(规则稳定后,把读 yaml 搬进 C,Python 层收缩或消失)
 - **`.project.yaml` 定位**:文件夹内 dotfile——随文件夹移动而存活(mv/cp/rsync 携带)、工具无关(Windows 的 `desktop.ini` 同架构,已存活 30 年)
 - **打包**:PKGBUILD 把扩展装到 `/usr/share/nautilus-python/extensions/`,`depends=(nautilus-python python-yaml)`,与 fork 版本锁步;装包前删用户目录旧副本防双菜单;开发用 `~/.local` 副本快速迭代
+- **fork 基底(2026-08-18 定)**:`gnome-50` 稳定分支——`main` 开发线要求未发布的 glib ≥ 2.89,稳定系统无法构建;稳定分支依赖实测匹配(glib 2.88.3 / gtk4 4.22.4 / libadwaita 1.9.3)
 
 ## 市场调研摘要
 

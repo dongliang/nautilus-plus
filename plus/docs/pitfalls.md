@@ -53,3 +53,18 @@
 
 - **现象**:修改插件后不生效
 - **处理**:`nautilus -q` 重启(加载错误在 stderr,启动时重定向到日志可捕获)
+
+## 10. Arch 把开发工具拆进子包(2026 实测)
+
+- **现象**:meson setup 报 `Program 'xxx' not found` 或 `tool variable contains erroneous value: '/usr/bin/xxx'`——后者典型的例子:`.pc` 文件声明了工具路径,但文件不存在
+- **原因**:Arch 把 glib 系 Python 开发工具拆出主包:
+  - `gdbus-codegen` → **`glib2-devel`**(glib2 的 optdepends)
+  - `g-ir-scanner` → **`gobject-introspection`**(用户只装了 `gobject-introspection-runtime`)
+  - 另需:`blueprint-compiler`(.blp 蓝图)、`itstool`、`libselinux`(构建头文件)、`meson`
+- **处理**:构建前一次性装齐:`sudo pacman -S --needed meson glib2-devel gobject-introspection blueprint-compiler itstool libselinux`
+
+## 11. fork 用 main 分支构建失败
+
+- **现象**:`Dependency 'gio-2.0' ... found 2.88.3 but need: '>= 2.89.0'`
+- **原因**:上游 `main` 是开发线,依赖未发布版本的 glib;稳定系统只有 2.88.x
+- **处理**:fork 基底用稳定分支 `gnome-50`(见 `research.md` 架构决策)

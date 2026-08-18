@@ -18,6 +18,9 @@
 
 ## 0.2.0 — 计划中
 
+- **决策(2026-08-18)**:fork 基底 = **`gnome-50` 稳定分支**(`main` 开发线要求未发布的 glib ≥ 2.89,在稳定系统上无法构建);本地 `main` 已重置为 gnome-50 并保留全部文档提交(GitHub fork 的 main 未动)
+- **初始构建成功(2026-08-18)**:`meson setup build -Ddocs=false && ninja`,404 目标全过,产物 `build/src/nautilus`(约 16 核 2 分钟内;1 条无害警告,上游 GI 绑定自带)
+
 - **决策(2026-08-17)**:显示名覆盖钩子**已否决**——底部 caption 方案更优(理由:心智一致性/零 fork 成本/信息更全/无边界怪癖,详见 `research.md` 第 1 节)。fork 唯一动机 = **分组视图**
 - 扩展重组:改名 `nautilus-meta.py`(菜单 ID、配置目录同步),纳入 `plus/extensions/python/`
 - 分组机制按 `research.md` 第 2 节蓝图评估(唯一剩余的 fork 钩子)
