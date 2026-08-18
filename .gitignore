@@ -2,6 +2,7 @@ build/
 .*/
 !.gitlab/
 !.claude/
+!.codex/
 
 # Ignore meson's subprojects folder
 /subprojects

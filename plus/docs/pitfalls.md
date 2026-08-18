@@ -52,7 +52,7 @@
 ## 9. 无热重载
 
 - **现象**:修改插件后不生效
-- **处理**:`nautilus -q` 重启(加载错误在 stderr,启动时重定向到日志可捕获)
+- **处理**:`nautilus -q` 重启(加载错误在 stderr,启动时重定向到日志可捕获);fork 用 `nautilus-plus -q`
 
 ## 10. Arch 把开发工具拆进子包(2026 实测)
 
@@ -74,3 +74,15 @@
 - **现象**:跑 `build/src/nautilus` 时菜单全英文、扩展不加载,stderr 出现 `'file:///usr/local/share/nautilus/ontology' is not a ontology location`
 - **原因**:meson 默认 prefix 是 `/usr/local`,而 Arch 系统在 `/usr`——翻译目录、扩展目录(`/usr/lib/nautilus/extensions-4`)、ontology 全部指向不存在的 `/usr/local/...`
 - **处理**:setup 时指定 `--prefix=/usr`:`meson setup build --prefix=/usr -Ddocs=false`;已配置的用 `meson setup --reconfigure build --prefix=/usr` 重配后重编
+
+## 13. 自定义 desktop/metainfo 用 configure_file 后,validate 测试的 depends 报错
+
+- **现象**:`meson setup` 报 `test keyword argument 'depends' was of type array[File] but should have been array[BuildTarget | ...]`
+- **原因**:上游 validate 测试 `depends: [desktop]`,但 `i18n.merge_file` 返回 CustomTarget 而 `configure_file` 返回 File,File 不能作 depends
+- **处理**:configure_file 分支的 validate 测试直接传 `join_paths(meson.current_build_dir(), 文件名)` 字符串路径、省略 depends(见 `data/meson.build` Plus 分支)
+
+## 14. appstreamcli 不接受 `<description xml:lang="...">`
+
+- **现象**:`validate-appdata` 报 `metainfo-localized-description-tag` 错误
+- **原因**:AppStream 的 description 只能有一份,本地化走翻译系统,不允许按语言给整段 description 换内容
+- **处理**:`<name>`/`<summary>` 可以带 `xml:lang`,description 不行——中文说明并入同一个 description 的 `<p>` 里

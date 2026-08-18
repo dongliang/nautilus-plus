@@ -1,5 +1,20 @@
 # 版本日志
 
+## 0.3.0 — 2026-08-19
+
+**fork 独立身份(nautilus-plus)✅ 已实现**,设计见 `design/plus-identity.md`
+
+- 新增 meson `profile=Plus` 构建:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false`
+- 二进制 `nautilus-plus`、Application ID `org.gnome.NautilusPlus`(D-Bus 名互不抢占)
+- fork 自有的桌面文件与 metainfo(`plus/desktop/`):显示名 `nautilus-plus` / zh_CN「文件管理器增强版」
+- **不安装、不注册 `org.freedesktop.FileManager1`**:fork 不抢系统默认文件管理器角色
+- 预览器/搜索提供者/FileOperations2 路径自动带 Plus 后缀(PROFILE 机制),与系统实例无交集
+- GSettings schema、libnautilus-extension soname、翻译、stock 扩展与系统共享(内容相同,协作非冲突)
+- C 改动:devel CSS 类仅 Devel profile;Plus 时跳过 freedesktop D-Bus(含调用点 NULL 守卫)
+- 验证:Plus 与默认两个 profile 均构建通过,21/21 测试全绿,desktop/appdata 校验通过
+- 安装(需 root,交互式):`sudo ninja -C build-plus install`;启动 `nautilus-plus`
+- **Python 扩展挂进 meson(2026-08-19)**:Plus 构建 `install_data` 装 `project-name-zh.py` 到 `/usr/share/nautilus-python/extensions/`(所有用户生效);新电脑依赖清单与完整安装流程见 `plus/README.md`;系统装后需删 `~/.local/...` 旧副本避免双菜单
+
 ## 0.1.0 — 2026-08-17
 
 **中文项目名显示(name-zh)✅ 已上线**
