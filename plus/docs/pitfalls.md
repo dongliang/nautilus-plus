@@ -68,3 +68,9 @@
 - **现象**:`Dependency 'gio-2.0' ... found 2.88.3 but need: '>= 2.89.0'`
 - **原因**:上游 `main` 是开发线,依赖未发布版本的 glib;稳定系统只有 2.88.x
 - **处理**:fork 基底用稳定分支 `gnome-50`(见 `research.md` 架构决策)
+
+## 12. 直接运行构建产物时 prefix 必须为 /usr
+
+- **现象**:跑 `build/src/nautilus` 时菜单全英文、扩展不加载,stderr 出现 `'file:///usr/local/share/nautilus/ontology' is not a ontology location`
+- **原因**:meson 默认 prefix 是 `/usr/local`,而 Arch 系统在 `/usr`——翻译目录、扩展目录(`/usr/lib/nautilus/extensions-4`)、ontology 全部指向不存在的 `/usr/local/...`
+- **处理**:setup 时指定 `--prefix=/usr`:`meson setup build --prefix=/usr -Ddocs=false`;已配置的用 `meson setup --reconfigure build --prefix=/usr` 重配后重编
