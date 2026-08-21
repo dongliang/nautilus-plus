@@ -14,6 +14,7 @@
 - 验证:Plus 与默认两个 profile 均构建通过,21/21 测试全绿,desktop/appdata 校验通过
 - 安装(需 root,交互式):`sudo ninja -C build-plus install`;启动 `nautilus-plus`
 - **Python 扩展挂进 meson(2026-08-19)**:Plus 构建 `install_data` 装 `project-name-zh.py` 到 `/usr/share/nautilus-python/extensions/`(所有用户生效);新电脑依赖清单与完整安装流程见 `plus/README.md`;系统装后需删 `~/.local/...` 旧副本避免双菜单
+- **右键修改中文项目名(2026-08-21)**:单个本地文件夹菜单打开 GTK4 单行编辑窗口,预填已有 `name-zh`;支持缺失 `.project.yaml` 时创建,已有文件按 YAML 节点位置局部更新并原子写回,保留其他字段与注释;空值、格式错误和写入失败均保留输入并提示
 
 ## 0.1.0 — 2026-08-17
 

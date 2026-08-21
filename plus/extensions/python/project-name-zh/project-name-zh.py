@@ -27,11 +27,14 @@ Install:
 
 import json
 import os
+import re
+import stat
+import tempfile
 import traceback
 
 import yaml
 
-from gi.repository import Gio, GLib, GObject, Nautilus
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Nautilus
 
 CONFIG_DIR = os.path.expanduser('~/.config/nautilus-project-zh')
 STATE_FILE = os.path.join(CONFIG_DIR, 'state')
@@ -84,11 +87,28 @@ def _set_enabled(on):
     _atomic_write(STATE_FILE, 'on' if on else 'off')
 
 
-def _atomic_write(path, text):
-    tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as f:
-        f.write(text)
-    os.replace(tmp, path)
+def _atomic_write(path, text, mode=None):
+    parent = os.path.dirname(path) or '.'
+    fd, tmp = tempfile.mkstemp(prefix='.' + os.path.basename(path) + '.',
+                               dir=parent)
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --- .project.yaml --------------------------------------------------------
@@ -124,6 +144,101 @@ def _yaml_info(folder_path):
     if len(_yaml_cache) > 1024:
         _yaml_cache.pop(next(iter(_yaml_cache)))
     return (name, archived)
+
+
+def _yaml_scalar(value):
+    if '\n' in value or '\r' in value:
+        raise ValueError('中文名不能包含换行')
+    lines = yaml.safe_dump(value, allow_unicode=True,
+                           default_flow_style=True,
+                           sort_keys=False).splitlines()
+    if len(lines) == 2 and lines[1] == '...':
+        scalar = lines[0]
+    elif len(lines) == 1:
+        scalar = lines[0]
+    else:
+        raise ValueError('中文名无法写入 YAML')
+    parsed = yaml.safe_load(f'{ATTR}: {scalar}\n')
+    if not isinstance(parsed, dict) or parsed.get(ATTR) != value:
+        raise ValueError('中文名无法写入 YAML')
+    return scalar
+
+
+def _replace_yaml_name(text, scalar):
+    try:
+        data = yaml.safe_load(text)
+        node = yaml.compose(text)
+    except (yaml.YAMLError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError('现有 .project.yaml 格式无效') from error
+    if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
+        raise ValueError('.project.yaml 顶层必须是对象')
+
+    name_nodes = []
+    for key_node, value_node in node.value:
+        if (isinstance(key_node, yaml.ScalarNode)
+                and key_node.tag == 'tag:yaml.org,2002:str'
+                and key_node.value == ATTR):
+            name_nodes.append(value_node)
+    if len(name_nodes) > 1:
+        raise ValueError('.project.yaml 中存在重复的 name-zh')
+
+    newline = '\r\n' if '\r\n' in text else '\n'
+    if name_nodes:
+        value_node = name_nodes[0]
+        start = value_node.start_mark.index
+        end = value_node.end_mark.index
+        replacement = scalar
+        if '\n' in text[start:end] or '\r' in text[start:end]:
+            replacement += newline
+        return text[:start] + replacement + text[end:]
+
+    if node.flow_style:
+        close = text.rfind('}', node.start_mark.index, node.end_mark.index)
+        if close < 0:
+            raise ValueError('无法定位 .project.yaml 的顶层对象')
+        # A trailing comma before '}' is valid YAML; don't double it.
+        prefix = text[:close].rstrip()
+        if prefix.endswith(','):
+            separator = ' '
+        elif node.value:
+            separator = ', '
+        else:
+            separator = ''
+        entry = f'{separator}{ATTR}: {scalar}'
+        return text[:close] + entry + text[close:]
+
+    marker = re.search(
+        r'(?m)^[ \t]*\.\.\.[ \t]*(?:#.*)?(?:\r?\n|$)',
+        text[node.end_mark.index:],
+    )
+    insert_at = (node.end_mark.index + marker.start()
+                 if marker is not None else len(text))
+    before = text[:insert_at]
+    if before and not before.endswith(('\n', '\r')):
+        before += newline
+    entry = f'{ATTR}: {scalar}{newline}'
+    return before + entry + text[insert_at:]
+
+
+def _write_name_zh(folder_path, value):
+    value = value.strip()
+    if not value:
+        raise ValueError('中文名不能为空')
+    scalar = _yaml_scalar(value)
+    yaml_path = os.path.join(folder_path, YAML_NAME)
+    try:
+        file_stat = os.stat(yaml_path)
+    except FileNotFoundError:
+        text = f'{ATTR}: {scalar}\n'
+        mode = 0o644
+    else:
+        if file_stat.st_size > YAML_MAX_SIZE:
+            raise ValueError('.project.yaml 文件过大')
+        with open(yaml_path, encoding='utf-8', newline='') as f:
+            original = f.read()
+        text = _replace_yaml_name(original, scalar)
+        mode = stat.S_IMODE(file_stat.st_mode)
+    _atomic_write(yaml_path, text, mode)
 
 
 # --- icon-view captions ---------------------------------------------------
@@ -181,20 +296,26 @@ def _sync_captions(enabled):
 
 # --- applying the name ----------------------------------------------------
 
+def _local_folder_path(file):
+    if not file.is_directory():
+        return None
+    uri = file.get_uri()
+    if not uri.startswith('file:'):
+        return None
+    try:
+        return GLib.filename_from_uri(uri)[0]
+    except GLib.Error:
+        return None
+
+
 def _apply(file):
     """Set/clear the name-zh and group extension attributes for one file.
 
     The group attribute is independent of the on/off switch: the switch only
     controls the Chinese captions. Archived folders are always grouped.
     """
-    if not file.is_directory():
-        return
-    uri = file.get_uri()
-    if not uri.startswith('file:'):
-        return
-    try:
-        folder = GLib.filename_from_uri(uri)[0]
-    except GLib.Error:
+    folder = _local_folder_path(file)
+    if folder is None:
         return
     name, archived = _yaml_info(folder)
 
@@ -239,6 +360,21 @@ def _refresh_folder(folder):
 
 # --- nautilus extension points -------------------------------------------
 
+def _active_window():
+    application = Gio.Application.get_default()
+    if application is not None:
+        try:
+            window = application.get_active_window()
+        except AttributeError:
+            window = None
+        if window is not None:
+            return window
+    for window in Gtk.Window.list_toplevels():
+        if window.is_active():
+            return window
+    return None
+
+
 class ProjectNameZhInfoProvider(GObject.GObject, Nautilus.InfoProvider):
     """Shows the Chinese name via a caption extension attribute."""
 
@@ -250,10 +386,122 @@ class ProjectNameZhInfoProvider(GObject.GObject, Nautilus.InfoProvider):
 
 
 class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
-    """Global on/off switch in the background context menu."""
+    """Provides the project-name action and the global caption switch."""
 
     def __init__(self):
         super().__init__()
+        self._dialogs = {}
+        self._alerts = set()
+
+    def get_file_items(self, files):
+        if len(files) != 1:
+            return []
+        file = files[0]
+        if _local_folder_path(file) is None:
+            return []
+        item = Nautilus.MenuItem(
+            name='ProjectNameZh::EditName',
+            label='修改中文名',
+            tip='编辑文件夹 .project.yaml 中的 name-zh',
+            icon=None,
+        )
+        item.connect('activate', self._on_edit_name, file)
+        return [item]
+
+    def _on_edit_name(self, _item, file):
+        folder = _local_folder_path(file)
+        if folder is None:
+            return
+        uri = file.get_uri()
+        existing = self._dialogs.get(uri)
+        if existing is not None:
+            existing.present()
+            return
+
+        name, _archived = _yaml_info(folder)
+        window = Gtk.Window(title='修改中文名')
+        window.set_default_size(420, 120)
+        window.set_modal(True)
+        window.set_destroy_with_parent(True)
+        parent = _active_window()
+        if parent is not None and parent is not window:
+            window.set_transient_for(parent)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        for margin in ('top', 'bottom', 'start', 'end'):
+            getattr(box, f'set_margin_{margin}')(18)
+        label = Gtk.Label(label='中文名')
+        label.set_xalign(0)
+        entry = Gtk.Entry()
+        entry.set_hexpand(True)
+        entry.set_activates_default(True)
+        entry.set_text(name or '')
+        entry.set_position(-1)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        buttons.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label='取消')
+        save = Gtk.Button(label='保存')
+        buttons.append(cancel)
+        buttons.append(save)
+        box.append(label)
+        box.append(entry)
+        box.append(buttons)
+        window.set_child(box)
+        window.set_default_widget(save)
+
+        cancel.connect('clicked', lambda _button: window.close())
+        save.connect('clicked', self._on_save_name, window, entry, file, folder)
+        window.connect('close-request', self._on_editor_close, uri)
+        key_controller = Gtk.EventControllerKey()
+        key_controller.connect('key-pressed', self._on_editor_key, window)
+        window.add_controller(key_controller)
+
+        self._dialogs[uri] = window
+        window.present()
+        entry.grab_focus()
+
+    def _on_editor_close(self, _window, uri):
+        self._dialogs.pop(uri, None)
+        return False
+
+    def _on_editor_key(self, _controller, keyval, _keycode, _state, window):
+        if keyval == Gdk.KEY_Escape:
+            window.close()
+            return True
+        return False
+
+    def _show_error(self, window, message):
+        alert = Gtk.AlertDialog()
+        alert.set_message('无法修改中文名')
+        alert.set_detail(message)
+        alert.set_buttons(['确定'])
+        self._alerts.add(alert)
+
+        def on_alert_done(_alert, result, _user_data):
+            try:
+                alert.choose_finish(result)
+            except GLib.Error:
+                pass
+            self._alerts.discard(alert)
+
+        alert.choose(window, None, on_alert_done, None)
+
+    def _on_save_name(self, _button, window, entry, file, folder):
+        value = entry.get_text().strip()
+        if not value:
+            self._show_error(window, '中文名不能为空。')
+            return
+        try:
+            _write_name_zh(folder, value)
+            _yaml_cache.pop(folder, None)
+            _apply(file)
+            file.invalidate_extension_info()
+        except Exception as error:
+            traceback.print_exc()
+            self._show_error(window, str(error) or '写入 .project.yaml 失败。')
+            return
+        window.close()
 
     def get_background_items(self, current_folder):
         item = Nautilus.MenuItem(
