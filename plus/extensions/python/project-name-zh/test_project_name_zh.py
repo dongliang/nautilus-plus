@@ -182,9 +182,31 @@ class ProjectYamlTests(unittest.TestCase):
             project_name_zh._write_name_zh(self.folder.name, '新项目')
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
+    def test_empty_value_removes_key_and_file(self):
+        self.path.write_text('name-zh: 旧名\n', encoding='utf-8')
+        project_name_zh._remove_name_zh(self.folder.name)
+        self.assertFalse(self.path.exists())
+
+    def test_empty_value_keeps_other_fields(self):
+        original = '# header\nname-zh: old  # keep\narchived: true\n'
+        self.path.write_text(original, encoding='utf-8')
+        project_name_zh._remove_name_zh(self.folder.name)
+        self.assertEqual(
+            self.path.read_text(encoding='utf-8'),
+            '# header\narchived: true\n',
+        )
+
+    def test_remove_without_key_leaves_file_alone(self):
+        original = 'archived: true\n'
+        self.path.write_text(original, encoding='utf-8')
+        project_name_zh._remove_name_zh(self.folder.name)
+        self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+
+    def test_remove_missing_file_is_noop(self):
+        project_name_zh._remove_name_zh(self.folder.name)
+        self.assertFalse(self.path.exists())
+
     def test_rejects_blank_and_multiline_values(self):
-        with self.assertRaises(ValueError):
-            project_name_zh._write_name_zh(self.folder.name, '  ')
         with self.assertRaises(ValueError):
             project_name_zh._write_name_zh(self.folder.name, 'one\ntwo')
         self.assertFalse(self.path.exists())

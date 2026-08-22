@@ -241,6 +241,65 @@ def _write_name_zh(folder_path, value):
     _atomic_write(yaml_path, text, mode)
 
 
+def _remove_yaml_name(text):
+    """Text minus the top-level name-zh entry.
+
+    Returns '' when nothing remains (caller deletes the file); None when
+    there was no name-zh key at all.
+    """
+    try:
+        data = yaml.safe_load(text)
+        node = yaml.compose(text)
+    except (yaml.YAMLError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError('现有 .project.yaml 格式无效') from error
+    if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
+        raise ValueError('.project.yaml 顶层必须是对象')
+
+    matches = [
+        (key_node, value_node)
+        for key_node, value_node in node.value
+        if (isinstance(key_node, yaml.ScalarNode)
+            and key_node.tag == 'tag:yaml.org,2002:str'
+            and key_node.value == ATTR)
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ValueError('.project.yaml 中存在重复的 name-zh')
+
+    # Excise the entry's whole physical line(s), trailing comment included.
+    key_node, value_node = matches[0]
+    line_start = text.rfind('\n', 0, key_node.start_mark.index) + 1
+    newline_at = text.find('\n', value_node.end_mark.index)
+    line_end = len(text) if newline_at < 0 else newline_at + 1
+    result = text[:line_start] + text[line_end:]
+    try:
+        empty = not yaml.safe_load(result)
+    except yaml.YAMLError as error:
+        raise ValueError('无法安全移除 name-zh 条目') from error
+    return '' if empty else result
+
+
+def _remove_name_zh(folder_path):
+    """Drop the name-zh entry; delete .project.yaml if nothing else remains."""
+    yaml_path = os.path.join(folder_path, YAML_NAME)
+    try:
+        file_stat = os.stat(yaml_path)
+    except FileNotFoundError:
+        return
+    if file_stat.st_size > YAML_MAX_SIZE:
+        raise ValueError('.project.yaml 文件过大')
+    with open(yaml_path, encoding='utf-8', newline='') as f:
+        original = f.read()
+    result = _remove_yaml_name(original)
+    if result is None:
+        return
+    if result == '':
+        os.unlink(yaml_path)
+    else:
+        _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
+
+
 # --- icon-view captions ---------------------------------------------------
 # The name label under the icon is always shown; captions are extra lines
 # below it. Making 'name-zh' the first caption puts the Chinese name
@@ -489,11 +548,13 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
 
     def _on_save_name(self, _button, window, entry, file, folder):
         value = entry.get_text().strip()
-        if not value:
-            self._show_error(window, '中文名不能为空。')
-            return
         try:
-            _write_name_zh(folder, value)
+            if value:
+                _write_name_zh(folder, value)
+            else:
+                # Empty input clears the Chinese name; the yaml file goes
+                # with it when no other data remains.
+                _remove_name_zh(folder)
             _yaml_cache.pop(folder, None)
             _apply(file)
             file.invalidate_extension_info()
