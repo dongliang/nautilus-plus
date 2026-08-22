@@ -184,13 +184,15 @@ class ProjectYamlTests(unittest.TestCase):
 
     def test_empty_value_removes_key_and_file(self):
         self.path.write_text('name-zh: 旧名\n', encoding='utf-8')
-        project_name_zh._remove_name_zh(self.folder.name)
+        project_name_zh._remove_key_in_folder(self.folder.name,
+                                              project_name_zh.ATTR)
         self.assertFalse(self.path.exists())
 
     def test_empty_value_keeps_other_fields(self):
         original = '# header\nname-zh: old  # keep\narchived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._remove_name_zh(self.folder.name)
+        project_name_zh._remove_key_in_folder(self.folder.name,
+                                              project_name_zh.ATTR)
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
             '# header\narchived: true\n',
@@ -199,11 +201,13 @@ class ProjectYamlTests(unittest.TestCase):
     def test_remove_without_key_leaves_file_alone(self):
         original = 'archived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._remove_name_zh(self.folder.name)
+        project_name_zh._remove_key_in_folder(self.folder.name,
+                                              project_name_zh.ATTR)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_remove_missing_file_is_noop(self):
-        project_name_zh._remove_name_zh(self.folder.name)
+        project_name_zh._remove_key_in_folder(self.folder.name,
+                                              project_name_zh.ATTR)
         self.assertFalse(self.path.exists())
 
     def test_rejects_blank_and_multiline_values(self):
@@ -212,16 +216,116 @@ class ProjectYamlTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
 
 
+class ArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = Path(self.folder.name) / project_name_zh.YAML_NAME
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def test_archive_creates_yaml(self):
+        project_name_zh._set_archived(self.folder.name, True)
+        self.assertEqual(self.path.read_text(encoding='utf-8'),
+                         'archived: true\n')
+
+    def test_archive_appends_preserving_comments_and_fields(self):
+        original = '# 项目\nname-zh: 阿尔法  # 保留\n'
+        self.path.write_text(original, encoding='utf-8')
+        project_name_zh._set_archived(self.folder.name, True)
+        self.assertEqual(
+            self.path.read_text(encoding='utf-8'),
+            '# 项目\nname-zh: 阿尔法  # 保留\narchived: true\n',
+        )
+
+    def test_archive_replaces_existing_value(self):
+        original = '# c\narchived: false  # note\nname-zh: x\n'
+        self.path.write_text(original, encoding='utf-8')
+        project_name_zh._set_archived(self.folder.name, True)
+        self.assertEqual(
+            self.path.read_text(encoding='utf-8'),
+            '# c\narchived: true  # note\nname-zh: x\n',
+        )
+
+    def test_unarchive_removes_line_and_keeps_rest(self):
+        original = 'name-zh: 阿尔法\narchived: true  # note\nother: y\n'
+        self.path.write_text(original, encoding='utf-8')
+        project_name_zh._set_archived(self.folder.name, False)
+        self.assertEqual(
+            self.path.read_text(encoding='utf-8'),
+            'name-zh: 阿尔法\nother: y\n',
+        )
+
+    def test_unarchive_deletes_file_when_empty(self):
+        self.path.write_text('archived: true\n', encoding='utf-8')
+        project_name_zh._set_archived(self.folder.name, False)
+        self.assertFalse(self.path.exists())
+
+    def test_unarchive_missing_file_is_noop(self):
+        project_name_zh._set_archived(self.folder.name, False)
+        self.assertFalse(self.path.exists())
+
+    def test_archive_is_idempotent(self):
+        original = '# keep\narchived: true\n'
+        self.path.write_text(original, encoding='utf-8')
+        mtime_before = self.path.stat().st_mtime_ns
+        project_name_zh._set_archived(self.folder.name, True)
+        self.assertEqual(self.path.stat().st_mtime_ns, mtime_before)
+        self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+
+    def test_unarchive_flow_mapping_keeps_braces(self):
+        self.path.write_text('{archived: true, name-zh: a}\n',
+                             encoding='utf-8')
+        project_name_zh._set_archived(self.folder.name, False)
+        result = self.path.read_text(encoding='utf-8')
+        import yaml as _yaml
+        data = _yaml.safe_load(result)
+        self.assertEqual(data, {'name-zh': 'a'})
+
+    def test_rejects_malformed_yaml_on_unarchive(self):
+        original = 'archived: [\n'
+        self.path.write_text(original, encoding='utf-8')
+        with self.assertRaises(ValueError):
+            project_name_zh._set_archived(self.folder.name, False)
+        self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+
+
 class MenuFilterTests(unittest.TestCase):
     def test_only_single_local_folder_gets_menu(self):
         menu = project_name_zh.ProjectNameZhMenu()
         folder = _FileInfo('file:///tmp/project')
         regular_file = _FileInfo('file:///tmp/notes.txt', directory=False)
         remote_folder = _FileInfo('sftp://host/project')
-        self.assertEqual(len(menu.get_file_items([folder])), 1)
-        self.assertEqual(menu.get_file_items([folder, remote_folder]), [])
+        items = menu.get_file_items([folder])
+        labels = [item.kwargs['label'] for item in items]
+        self.assertEqual(labels, ['修改中文名', '归档'])
+        # Remote members are dropped; the local one still gets the toggle.
+        items = menu.get_file_items([folder, remote_folder])
+        labels = [item.kwargs['label'] for item in items]
+        self.assertEqual(labels, ['归档'])
         self.assertEqual(menu.get_file_items([regular_file]), [])
         self.assertEqual(menu.get_file_items([remote_folder]), [])
+
+    def test_multi_select_shows_only_archive_toggle(self):
+        menu = project_name_zh.ProjectNameZhMenu()
+        folders = [_FileInfo('file:///tmp/a'), _FileInfo('file:///tmp/b')]
+        items = menu.get_file_items(folders)
+        labels = [item.kwargs['label'] for item in items]
+        self.assertEqual(labels, ['归档'])
+
+    def test_all_archived_selection_offers_unarchive(self):
+        menu = project_name_zh.ProjectNameZhMenu()
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / project_name_zh.YAML_NAME
+            path.write_text('archived: true\n', encoding='utf-8')
+            folder = _FileInfo('file://' + d)
+            items = menu.get_file_items([folder])
+            self.assertEqual(items[-1].kwargs['label'], '取消归档')
+
+    def test_non_folder_selection_gets_nothing(self):
+        menu = project_name_zh.ProjectNameZhMenu()
+        regular_file = _FileInfo('file:///tmp/notes.txt', directory=False)
+        self.assertEqual(menu.get_file_items([regular_file]), [])
 
 
 if __name__ == '__main__':

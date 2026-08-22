@@ -15,6 +15,7 @@
 - 安装(需 root,交互式):`sudo ninja -C build-plus install`;启动 `nautilus-plus`
 - **Python 扩展挂进 meson(2026-08-19)**:Plus 构建 `install_data` 装 `project-name-zh.py` 到 `/usr/share/nautilus-python/extensions/`(所有用户生效);新电脑依赖清单与完整安装流程见 `plus/README.md`;系统装后需删 `~/.local/...` 旧副本避免双菜单
 - **右键修改中文项目名(2026-08-21)**:单个本地文件夹菜单打开 GTK4 单行编辑窗口,预填已有 `name-zh`;支持缺失 `.project.yaml` 时创建,已有文件按 YAML 节点位置局部更新并原子写回,保留其他字段与注释;清空输入确认 = 移除 `name-zh` 键,文件再无数据时连文件一起删除;格式错误和写入失败均保留输入并提示
+- **右键归档切换(2026-08-22)**:文件夹(支持多选)右键「归档」/「取消归档」动态标签;写入/移除 `archived: true`,复用注释保留的局部更新与原子写回;幂等跳过已处目标态的文件夹;批量失败汇总弹窗,成功项照常刷新分组视图。设计见 `design/archive-toggle.md`
 
 ## 0.1.0 — 2026-08-17
 

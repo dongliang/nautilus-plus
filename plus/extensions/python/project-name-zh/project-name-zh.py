@@ -15,6 +15,11 @@ partition the view — archived folders form a trailing "已归档" group with a
 header, ungrouped items stay in front without one. Grouping is independent
 of the switch below (it only controls the Chinese captions).
 
+Folders can be archived and unarchived from the selection context menu
+(multi-select supported): the action writes or removes `archived: true`
+in each folder's `.project.yaml`, reusing the same comment-preserving
+local update as the Chinese-name editor.
+
 A global on/off switch lives in the background context menu (right-click
 empty space in a folder). Toggling takes effect immediately, and the menu
 label flips to match within a moment. The switch state is stored in
@@ -44,6 +49,7 @@ ICON_VIEW_SCHEMA = 'org.gnome.nautilus.icon-view'
 CAPTIONS_KEY = 'captions'
 ATTR = 'name-zh'
 GROUP_ATTR = 'group'
+ARCHIVED_KEY = 'archived'
 ARCHIVED_LABEL = '已归档'
 YAML_NAME = '.project.yaml'
 YAML_MAX_SIZE = 1024 * 1024
@@ -164,7 +170,13 @@ def _yaml_scalar(value):
     return scalar
 
 
-def _replace_yaml_name(text, scalar):
+def _replace_yaml_key(text, key, scalar):
+    """Text with the top-level `key` value replaced by `scalar`.
+
+    Missing keys are appended (before a trailing `...` in block style,
+    inside the braces in flow style). Comments, other fields, key order
+    and line endings are preserved.
+    """
     try:
         data = yaml.safe_load(text)
         node = yaml.compose(text)
@@ -173,18 +185,18 @@ def _replace_yaml_name(text, scalar):
     if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
         raise ValueError('.project.yaml 顶层必须是对象')
 
-    name_nodes = []
+    value_nodes = []
     for key_node, value_node in node.value:
         if (isinstance(key_node, yaml.ScalarNode)
                 and key_node.tag == 'tag:yaml.org,2002:str'
-                and key_node.value == ATTR):
-            name_nodes.append(value_node)
-    if len(name_nodes) > 1:
-        raise ValueError('.project.yaml 中存在重复的 name-zh')
+                and key_node.value == key):
+            value_nodes.append(value_node)
+    if len(value_nodes) > 1:
+        raise ValueError(f'.project.yaml 中存在重复的 {key}')
 
     newline = '\r\n' if '\r\n' in text else '\n'
-    if name_nodes:
-        value_node = name_nodes[0]
+    if value_nodes:
+        value_node = value_nodes[0]
         start = value_node.start_mark.index
         end = value_node.end_mark.index
         replacement = scalar
@@ -204,7 +216,7 @@ def _replace_yaml_name(text, scalar):
             separator = ', '
         else:
             separator = ''
-        entry = f'{separator}{ATTR}: {scalar}'
+        entry = f'{separator}{key}: {scalar}'
         return text[:close] + entry + text[close:]
 
     marker = re.search(
@@ -216,36 +228,15 @@ def _replace_yaml_name(text, scalar):
     before = text[:insert_at]
     if before and not before.endswith(('\n', '\r')):
         before += newline
-    entry = f'{ATTR}: {scalar}{newline}'
+    entry = f'{key}: {scalar}{newline}'
     return before + entry + text[insert_at:]
 
 
-def _write_name_zh(folder_path, value):
-    value = value.strip()
-    if not value:
-        raise ValueError('中文名不能为空')
-    scalar = _yaml_scalar(value)
-    yaml_path = os.path.join(folder_path, YAML_NAME)
-    try:
-        file_stat = os.stat(yaml_path)
-    except FileNotFoundError:
-        text = f'{ATTR}: {scalar}\n'
-        mode = 0o644
-    else:
-        if file_stat.st_size > YAML_MAX_SIZE:
-            raise ValueError('.project.yaml 文件过大')
-        with open(yaml_path, encoding='utf-8', newline='') as f:
-            original = f.read()
-        text = _replace_yaml_name(original, scalar)
-        mode = stat.S_IMODE(file_stat.st_mode)
-    _atomic_write(yaml_path, text, mode)
-
-
-def _remove_yaml_name(text):
-    """Text minus the top-level name-zh entry.
+def _remove_yaml_key(text, key):
+    """Text minus the top-level `key` entry.
 
     Returns '' when nothing remains (caller deletes the file); None when
-    there was no name-zh key at all.
+    the key was absent.
     """
     try:
         data = yaml.safe_load(text)
@@ -260,15 +251,37 @@ def _remove_yaml_name(text):
         for key_node, value_node in node.value
         if (isinstance(key_node, yaml.ScalarNode)
             and key_node.tag == 'tag:yaml.org,2002:str'
-            and key_node.value == ATTR)
+            and key_node.value == key)
     ]
     if not matches:
         return None
     if len(matches) > 1:
-        raise ValueError('.project.yaml 中存在重复的 name-zh')
+        raise ValueError(f'.project.yaml 中存在重复的 {key}')
 
-    # Excise the entry's whole physical line(s), trailing comment included.
     key_node, value_node = matches[0]
+    if node.flow_style:
+        # Flow style has no line structure: excise the entry plus one
+        # adjacent comma (either the one after it, or the one before it
+        # when removing the last entry).
+        start = key_node.start_mark.index
+        end = value_node.end_mark.index
+        comma_after = text.find(',', end, node.end_mark.index)
+        if comma_after >= 0:
+            end = comma_after + 1
+        else:
+            comma_before = text.rfind(',', 0, start)
+            if comma_before < 0:
+                return ''  # Sole entry: nothing remains.
+            start = comma_before
+        result = text[:start] + text[end:]
+        try:
+            empty = not yaml.safe_load(result)
+        except yaml.YAMLError as error:
+            raise ValueError('无法安全移除条目') from error
+        return '' if empty else result
+
+    # Block style: excise the entry's whole physical line(s), trailing
+    # comment included.
     line_start = text.rfind('\n', 0, key_node.start_mark.index) + 1
     newline_at = text.find('\n', value_node.end_mark.index)
     line_end = len(text) if newline_at < 0 else newline_at + 1
@@ -276,28 +289,89 @@ def _remove_yaml_name(text):
     try:
         empty = not yaml.safe_load(result)
     except yaml.YAMLError as error:
-        raise ValueError('无法安全移除 name-zh 条目') from error
+        raise ValueError('无法安全移除条目') from error
     return '' if empty else result
 
 
-def _remove_name_zh(folder_path):
-    """Drop the name-zh entry; delete .project.yaml if nothing else remains."""
+def _update_yaml_file(folder_path, update):
+    """Apply update(original_text) -> new text to .project.yaml atomically.
+
+    An update returning '' deletes the file; None is a no-op. Missing file
+    starts from '' (the updater produces the initial content).
+    """
     yaml_path = os.path.join(folder_path, YAML_NAME)
     try:
         file_stat = os.stat(yaml_path)
     except FileNotFoundError:
+        _atomic_write(yaml_path, update(''), 0o644)
         return
     if file_stat.st_size > YAML_MAX_SIZE:
         raise ValueError('.project.yaml 文件过大')
     with open(yaml_path, encoding='utf-8', newline='') as f:
         original = f.read()
-    result = _remove_yaml_name(original)
+    result = update(original)
     if result is None:
         return
     if result == '':
         os.unlink(yaml_path)
     else:
         _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
+
+
+def _write_name_zh(folder_path, value):
+    value = value.strip()
+    if not value:
+        raise ValueError('中文名不能为空')
+    scalar = _yaml_scalar(value)
+
+    def update(text):
+        return f'{ATTR}: {scalar}\n' if text == '' else _replace_yaml_key(
+            text, ATTR, scalar)
+
+    _update_yaml_file(folder_path, update)
+
+
+def _remove_key_in_folder(folder_path, key):
+    """Drop a top-level key; delete .project.yaml if nothing else remains."""
+    yaml_path = os.path.join(folder_path, YAML_NAME)
+    try:
+        file_stat = os.stat(yaml_path)
+    except FileNotFoundError:
+        return  # Nothing to remove.
+    if file_stat.st_size > YAML_MAX_SIZE:
+        raise ValueError('.project.yaml 文件过大')
+    with open(yaml_path, encoding='utf-8', newline='') as f:
+        original = f.read()
+    result = _remove_yaml_key(original, key)
+    if result is None:
+        return
+    if result == '':
+        os.unlink(yaml_path)
+    else:
+        _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
+
+
+def _set_archived(folder_path, archived):
+    """Write or remove `archived: true` in the folder's .project.yaml.
+
+    Removing it deletes the file when no other data remains. Idempotent:
+    a folder already in the requested state is left untouched (missing
+    file + unarchive is also a no-op).
+    """
+    if archived:
+        if _yaml_info(folder_path)[1] is True:
+            return
+
+        def update(text):
+            scalar = 'true'
+            return (f'{ARCHIVED_KEY}: {scalar}\n' if text == ''
+                    else _replace_yaml_key(text, ARCHIVED_KEY, scalar))
+
+        _update_yaml_file(folder_path, update)
+    elif os.path.exists(os.path.join(folder_path, YAML_NAME)):
+        # Missing file + unarchive: nothing to do.
+        _remove_key_in_folder(folder_path, ARCHIVED_KEY)
+
 
 
 # --- icon-view captions ---------------------------------------------------
@@ -453,19 +527,58 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         self._alerts = set()
 
     def get_file_items(self, files):
-        if len(files) != 1:
-            return []
-        file = files[0]
-        if _local_folder_path(file) is None:
-            return []
-        item = Nautilus.MenuItem(
-            name='ProjectNameZh::EditName',
-            label='修改中文名',
-            tip='编辑文件夹 .project.yaml 中的 name-zh',
+        # Multi-selection keeps the batch archive toggle only — "修改中文
+        # 名" makes no sense when the user selected more than one item,
+        # even if some of them are not local folders.
+        folders = [(file, path) for file in files
+                   if (path := _local_folder_path(file)) is not None]
+        if len(files) != 1 or not folders:
+            if not folders:
+                return []
+            single = False
+        else:
+            single = True
+        items = []
+        if single:
+            file, _folder = folders[0]
+            items.append(Nautilus.MenuItem(
+                name='ProjectNameZh::EditName',
+                label='修改中文名',
+                tip='编辑文件夹 .project.yaml 中的 name-zh',
+                icon=None,
+            ))
+            items[-1].connect('activate', self._on_edit_name, file)
+
+        # Dynamic action label: offer unarchive only when every selected
+        # folder is archived; mixed selections offer archiving (already
+        # archived members are left alone).
+        all_archived = all(_yaml_info(folder)[1] is True
+                           for _file, folder in folders)
+        items.append(Nautilus.MenuItem(
+            name='ProjectNameZh::ToggleArchived',
+            label='取消归档' if all_archived else '归档',
+            tip='切换文件夹 .project.yaml 中的 archived: true',
             icon=None,
-        )
-        item.connect('activate', self._on_edit_name, file)
-        return [item]
+        ))
+        items[-1].connect('activate', self._on_toggle_archived,
+                          folders, not all_archived)
+        return items
+
+    def _on_toggle_archived(self, _item, folders, archived):
+        failures = []
+        for file, folder in folders:
+            try:
+                _set_archived(folder, archived)
+            except Exception as error:
+                traceback.print_exc()
+                failures.append(f'{os.path.basename(folder)}: '
+                                f'{error or "写入 .project.yaml 失败"}')
+                continue
+            _yaml_cache.pop(folder, None)
+            _apply(file)
+            file.invalidate_extension_info()
+        if failures:
+            self._show_error('归档状态修改失败', '\n'.join(failures))
 
     def _on_edit_name(self, _item, file):
         folder = _local_folder_path(file)
@@ -530,12 +643,14 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             return True
         return False
 
-    def _show_error(self, window, message):
+    def _show_error(self, message, detail, parent=None):
         alert = Gtk.AlertDialog()
-        alert.set_message('无法修改中文名')
-        alert.set_detail(message)
+        alert.set_message(message)
+        alert.set_detail(detail)
         alert.set_buttons(['确定'])
         self._alerts.add(alert)
+        if parent is None:
+            parent = _active_window()
 
         def on_alert_done(_alert, result, _user_data):
             try:
@@ -544,7 +659,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
                 pass
             self._alerts.discard(alert)
 
-        alert.choose(window, None, on_alert_done, None)
+        alert.choose(parent, None, on_alert_done, None)
 
     def _on_save_name(self, _button, window, entry, file, folder):
         value = entry.get_text().strip()
@@ -554,13 +669,15 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             else:
                 # Empty input clears the Chinese name; the yaml file goes
                 # with it when no other data remains.
-                _remove_name_zh(folder)
+                _remove_key_in_folder(folder, ATTR)
             _yaml_cache.pop(folder, None)
             _apply(file)
             file.invalidate_extension_info()
         except Exception as error:
             traceback.print_exc()
-            self._show_error(window, str(error) or '写入 .project.yaml 失败。')
+            self._show_error('无法修改中文名',
+                             str(error) or '写入 .project.yaml 失败。',
+                             parent=window)
             return
         window.close()
 
