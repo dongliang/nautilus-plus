@@ -78,6 +78,7 @@
 #include "nautilus-view-info.h"
 #include "nautilus-view-item.h"
 #include "nautilus-view-model.h"
+#include "nautilus-archived-filter.h"
 #include "nautilus-window-slot.h"
 
 /* Minimum starting update interval */
@@ -154,6 +155,13 @@ struct _NautilusFilesView
 
     NautilusViewModel *model;
     GtkSelectionFilterModel *selection;
+
+    /* Hide-archived feature: the archived filter combined with any slot
+     * filter into the single "filter" slot of the view model. See
+     * plus/docs/design/hide-archived.md */
+    NautilusArchivedFilter *archived_filter;
+    GtkFilter *combined_filter;
+    gulong slot_filter_notify_id;
 
     NautilusQuery *search_query;
     GFile *location_before_search;
@@ -3316,6 +3324,11 @@ nautilus_files_view_dispose (GObject *object)
     g_clear_object (&self->outgoing_search);
     g_clear_object (&self->location);
     g_clear_object (&self->selection);
+
+    g_clear_signal_handler (&self->slot_filter_notify_id, self->slot);
+    g_clear_object (&self->combined_filter);
+    g_clear_object (&self->archived_filter);
+
     g_clear_object (&self->model);
 
     adw_bin_set_child (ADW_BIN (self), NULL);
@@ -9113,6 +9126,31 @@ nautilus_files_view_is_loading (NautilusFilesView *self)
 }
 
 static void
+slot_filter_changed_cb (NautilusFilesView *self)
+{
+    /* Rebuild the combined filter: GtkAnyFilter over [slot filter,
+     * archived filter]. An item stays visible only when every component
+     * matches; a NULL slot filter contributes no constraint. */
+    g_clear_object (&self->combined_filter);
+
+    GtkFilter *slot_filter = nautilus_window_slot_get_filter (self->slot);
+
+    if (slot_filter == NULL)
+    {
+        self->combined_filter = g_object_ref (GTK_FILTER (self->archived_filter));
+    }
+    else
+    {
+        GtkMultiFilter *any = GTK_MULTI_FILTER (gtk_any_filter_new ());
+        gtk_multi_filter_append (any, g_object_ref (slot_filter));
+        gtk_multi_filter_append (any, g_object_ref (GTK_FILTER (self->archived_filter)));
+        self->combined_filter = GTK_FILTER (any);
+    }
+
+    nautilus_view_model_set_filter (self->model, self->combined_filter);
+}
+
+static void
 nautilus_files_view_constructed (GObject *object)
 {
     G_OBJECT_CLASS (nautilus_files_view_parent_class)->constructed (object);
@@ -9129,9 +9167,16 @@ nautilus_files_view_constructed (GObject *object)
                              G_CONNECT_DEFAULT);
 
     self->model = nautilus_view_model_new (use_single_selection);
-    g_object_bind_property (self->slot, "filter",
-                            self->model, "filter",
-                            G_BINDING_SYNC_CREATE);
+
+    /* Hide-archived: combine the archived filter with whatever filter the
+     * slot carries (NULL for plain browsing; a view-item filter in
+     * FileChooser mode) into the view model's single "filter" slot. */
+    self->archived_filter = nautilus_archived_filter_new ();
+    self->slot_filter_notify_id =
+        g_signal_connect_object (self->slot, "notify::filter",
+                                 G_CALLBACK (slot_filter_changed_cb),
+                                 self, G_CONNECT_SWAPPED);
+    slot_filter_changed_cb (self);
 
     /* GtkSelectionModel::selection-changed only notifies about individual item
      * selection state changes. Changes to the selection set require listening

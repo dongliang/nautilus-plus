@@ -20,6 +20,15 @@ Folders can be archived and unarchived from the selection context menu
 in each folder's `.project.yaml`, reusing the same comment-preserving
 local update as the Chinese-name editor.
 
+Archived folders can be hidden entirely (background context menu):
+the fork's C layer filters out items carrying the archived group key,
+so they vanish from icon view, list view (headers included) and search
+results, as if they did not exist. The switch state lives in the same
+state file as the captions switch (hide-archived=on/off line, default
+off = show). The hide menu item only appears when running as the fork
+(nautilus-plus): the stock nautilus has no filter hook, so the toggle
+would do nothing there.
+
 A global on/off switch lives in the background context menu (right-click
 empty space in a folder). Toggling takes effect immediately, and the menu
 label flips to match within a moment. The switch state is stored in
@@ -34,6 +43,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 import traceback
 
@@ -46,6 +56,8 @@ STATE_FILE = os.path.join(CONFIG_DIR, 'state')
 CAPTIONS_BACKUP = os.path.join(CONFIG_DIR, 'captions-backup.json')
 
 ICON_VIEW_SCHEMA = 'org.gnome.nautilus.icon-view'
+PREFERENCES_SCHEMA = 'org.gnome.nautilus.preferences'
+HIDE_ARCHIVED_KEY = 'hide-archived'
 CAPTIONS_KEY = 'captions'
 ATTR = 'name-zh'
 GROUP_ATTR = 'group'
@@ -55,6 +67,7 @@ YAML_NAME = '.project.yaml'
 YAML_MAX_SIZE = 1024 * 1024
 
 _settings = Gio.Settings.new(ICON_VIEW_SCHEMA)
+_preferences = Gio.Settings.new(PREFERENCES_SCHEMA)
 
 # folder_path -> (mtime, name_zh | None, archived: bool)
 _yaml_cache = {}
@@ -64,33 +77,70 @@ _shown = set()
 # folders we ever marked as grouped (archived); the source of truth for
 # clearing the group attribute when it no longer applies
 _grouped = set()
-# (mtime, enabled)
-_state_cache = (None, None)
+# (mtime, unused, raw text) — the state file is now multi-line key=value
+_state_cache = (None, None, '')
 
 
 # --- switch state ---------------------------------------------------------
 
-def _enabled():
-    """Whether the Chinese names are shown. Defaults to on."""
+def _read_state():
+    """State file text, or '' when missing. Cached by mtime."""
     global _state_cache
     try:
         mtime = os.path.getmtime(STATE_FILE)
     except OSError:
-        return True
+        return ''
     if _state_cache[0] == mtime:
-        return _state_cache[1]
+        return _state_cache[2]
     try:
         with open(STATE_FILE, encoding='utf-8') as f:
-            enabled = f.read().strip() == 'on'
+            text = f.read()
     except OSError:
-        enabled = True
-    _state_cache = (mtime, enabled)
-    return enabled
+        return ''
+    _state_cache = (mtime, None, text)
+    return text
+
+
+def _write_state(text):
+    global _state_cache
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    _atomic_write(STATE_FILE, text)
+    try:
+        _state_cache = (os.path.getmtime(STATE_FILE), None, text)
+    except OSError:
+        _state_cache = (None, None, '')
+
+
+def _enabled():
+    """Whether the Chinese names are shown. Defaults to on."""
+    first_line = _read_state().splitlines()[0].strip() \
+        if _read_state().splitlines() else ''
+    # Missing file / legacy formats without a leading on|off default to on.
+    return first_line != 'off'
 
 
 def _set_enabled(on):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    _atomic_write(STATE_FILE, 'on' if on else 'off')
+    lines = _read_state().splitlines()
+    value = 'on' if on else 'off'
+    if lines and lines[0].strip() in ('on', 'off'):
+        lines[0] = value
+    else:
+        lines.insert(0, value)
+    _write_state('\n'.join(lines) + '\n')
+
+
+def _hide_archived():
+    """Whether archived folders are hidden. Defaults to off (= show).
+
+    The state lives in the shared nautilus gsettings (fork-only key):
+    the C filter reads it directly, so every window follows instantly.
+    The stock nautilus never reads this key.
+    """
+    return _preferences.get_boolean(HIDE_ARCHIVED_KEY)
+
+
+def _set_hide_archived(hide):
+    _preferences.set_boolean(HIDE_ARCHIVED_KEY, hide)
 
 
 def _atomic_write(path, text, mode=None):
@@ -493,6 +543,31 @@ def _refresh_folder(folder):
 
 # --- nautilus extension points -------------------------------------------
 
+def _running_as_plus(candidates=None):
+    """True when loaded by the nautilus-plus fork (has the C filter hook).
+
+    The hide-archived toggle only makes sense in the fork: the stock
+    nautilus has no filter, so the menu item is not offered there.
+    nautilus-python embeds CPython in-process, so /proc/self/exe is the
+    host binary; fall back to cmdline and argv[0] for odd setups.
+    """
+    if candidates is None:
+        candidates = []
+        try:
+            candidates.append(os.path.realpath('/proc/self/exe'))
+        except OSError:
+            pass
+        try:
+            with open('/proc/self/cmdline', 'rb') as f:
+                candidates.append(f.read().split(b'\0', 1)[0].decode(
+                    'utf-8', 'replace'))
+        except OSError:
+            pass
+        if sys.argv:
+            candidates.append(sys.argv[0])
+    return any(os.path.basename(c) == 'nautilus-plus' for c in candidates)
+
+
 def _active_window():
     application = Gio.Application.get_default()
     if application is not None:
@@ -689,7 +764,21 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             icon=None,
         )
         item.connect('activate', self._on_toggle, current_folder)
-        return [item]
+        items = [item]
+
+        # Hide-archived needs the fork's C filter hook; in the stock
+        # nautilus the toggle would do nothing, so don't offer it there.
+        if _running_as_plus():
+            hide_item = Nautilus.MenuItem(
+                name='ProjectNameZh::ToggleHideArchived',
+                label='隐藏归档' if not _hide_archived() else '显示归档',
+                tip='切换已归档文件夹的可见性(由 nautilus-plus 过滤)',
+                icon=None,
+            )
+            hide_item.connect('activate', self._on_toggle_hide_archived,
+                              current_folder)
+            items.append(hide_item)
+        return items
 
     def _on_toggle(self, _item, current_folder):
         try:
@@ -702,6 +791,17 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             # the current folder's own file changes: re-adding the attribute
             # fires nautilus_file_changed on it, which schedules a menu
             # refresh, so the label flips to match the new state.
+            current_folder.add_string_attribute(
+                ATTR, current_folder.get_string_attribute(ATTR) or '')
+        except Exception:
+            traceback.print_exc()
+
+    def _on_toggle_hide_archived(self, _item, current_folder):
+        try:
+            _set_hide_archived(not _hide_archived())
+            _refresh_folder(current_folder)
+            # Same menu-rebuild trick as the captions toggle: touching the
+            # current folder's extension info schedules a menu refresh.
             current_folder.add_string_attribute(
                 ATTR, current_folder.get_string_attribute(ATTR) or '')
         except Exception:

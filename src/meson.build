@@ -110,6 +110,8 @@ libnautilus_sources = [
   'nautilus-files-view-dnd.h',
   'nautilus-files-view.c',
   'nautilus-files-view.h',
+  'nautilus-archived-filter.c',
+  'nautilus-archived-filter.h',
   'nautilus-floating-bar.c',
   'nautilus-floating-bar.h',
   'nautilus-freedesktop-dbus.c',

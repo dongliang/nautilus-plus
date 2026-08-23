@@ -10,10 +10,10 @@ from urllib.parse import unquote, urlparse
 
 class _Settings:
     def __init__(self):
-        self.values = {'captions': []}
+        self.values = {'captions': [], 'hide-archived': False}
 
     @classmethod
-    def new(cls, _schema):
+    def new(cls, schema):
         return cls()
 
     def get_strv(self, key):
@@ -21,6 +21,12 @@ class _Settings:
 
     def set_strv(self, key, value):
         self.values[key] = list(value)
+
+    def get_boolean(self, key):
+        return bool(self.values.get(key, False))
+
+    def set_boolean(self, key, value):
+        self.values[key] = bool(value)
 
 
 class _MenuItem:
@@ -288,6 +294,54 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             project_name_zh._set_archived(self.folder.name, False)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
+
+
+class HideArchivedStateTests(unittest.TestCase):
+    """hide-archived lives in the shared nautilus gsettings (fork-only key)."""
+
+    def setUp(self):
+        self.prefs = project_name_zh._preferences
+
+    def test_defaults_to_show(self):
+        self.assertFalse(project_name_zh._hide_archived())
+
+    def test_round_trip(self):
+        project_name_zh._set_hide_archived(True)
+        self.assertTrue(project_name_zh._hide_archived())
+        # Captions switch untouched.
+        self.assertTrue(project_name_zh._enabled())
+        project_name_zh._set_hide_archived(False)
+        self.assertFalse(project_name_zh._hide_archived())
+
+    def test_set_enabled_preserves_hide_archived(self):
+        project_name_zh._set_hide_archived(True)
+        project_name_zh._set_enabled(False)
+        self.assertFalse(project_name_zh._enabled())
+        self.assertTrue(self.prefs.values['hide-archived'])
+
+    def test_state_file_only_holds_captions_switch(self):
+        project_name_zh._set_enabled(False)
+        project_name_zh._set_hide_archived(True)
+        content = Path(project_name_zh.STATE_FILE).read_text(encoding='utf-8')
+        self.assertNotIn('hide-archived', content)
+
+
+class RunningAsPlusTests(unittest.TestCase):
+    def test_detection_matches_fork_name(self):
+        self.assertTrue(project_name_zh._running_as_plus(
+            ['/usr/bin/nautilus-plus']))
+        self.assertTrue(project_name_zh._running_as_plus(
+            ['/proc/exe', 'nautilus-plus', '/usr/bin/python3']))
+        self.assertFalse(project_name_zh._running_as_plus(
+            ['/usr/bin/nautilus', '--gapplication-service']))
+        self.assertFalse(project_name_zh._running_as_plus([]))
+
+    def test_stock_nautilus_gets_no_hide_menu(self):
+        menu = project_name_zh.ProjectNameZhMenu()
+        folder = _FileInfo('file:///tmp/project')
+        items = menu.get_background_items(folder)
+        names = [item.kwargs['name'] for item in items]
+        self.assertNotIn('ProjectNameZh::ToggleHideArchived', names)
 
 
 class MenuFilterTests(unittest.TestCase):
