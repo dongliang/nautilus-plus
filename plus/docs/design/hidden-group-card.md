@@ -75,4 +75,8 @@ files_view_end_file_changes()
 
 扩展属性由 nautilus-python 的 info provider 以 idle 异步提供,而 items 在 `files_added` 后立即进入视图模型——**匹配发生在前、属性就绪在后**,初始加载(含导航重进)时归档条目会先放行;属性就绪后若无人触发重评估,条目将永远留在视图中(重进路径后"卡片在但归档未隐藏"即此症状)。
 
-修复:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估并刷新卡片(dispose 时 `g_clear_handle_id` 清理)。文件清单就绪时属性尚未就绪,因此必须双触发——只靠 `end_file_changes`(done-loading 时点)覆盖不全。
+修复(两件套):
+
+1. **就绪后重评估**:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估并刷新卡片(dispose 时 `g_clear_handle_id` 清理)。文件清单就绪时属性尚未就绪,因此必须双触发——只靠 `end_file_changes`(done-loading 时点)覆盖不全。
+2. **就绪前保守隐藏**(避免"显示一瞬再隐藏"的闪动):`NautilusArchivedFilter::match` 对「目录且扩展属性仍在检索中(`nautilus_file_is_extension_info_pending`)」的条目直接返回 FALSE——归档文件夹从头到尾不出现,非归档文件夹在属性就绪后的重评估中正常回归;文件永不归档,直接放行不受影响。扩展未安装时 provider 列表为空、`pending` 恒为 FALSE,按原逻辑放行(安全退化)。
+3. **重评估后同步空状态**:保守隐藏会让「全文件夹目录」在属性就绪前显示为空,重评估放行后模型条目数变化发生在 `end_file_changes` 之外——`archived_refilter_idle_callback` 里除重过滤与卡片刷新外,还要调 `update_status_overlay`(收起「Folder is Empty」页)与 `update_toolbar_menus`(恢复排序/缩放可用),否则窗口停在"文件夹为空"。

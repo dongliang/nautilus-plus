@@ -146,6 +146,7 @@ gboolean                nautilus_file_check_if_ready                    (Nautilu
 void                    nautilus_file_invalidate_attributes             (NautilusFile                   *file,
 									 NautilusFileAttributes          attributes);
 void                    nautilus_file_invalidate_all_attributes         (NautilusFile                   *file);
+gboolean                nautilus_file_is_extension_info_pending         (NautilusFile                   *file);
 
 /* Basic attributes for file objects. */
 gboolean                nautilus_file_contains_text                     (NautilusFile                   *file);

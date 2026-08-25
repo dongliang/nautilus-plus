@@ -63,6 +63,22 @@ nautilus_archived_filter_match (GtkFilter *filter,
 
     file = nautilus_view_item_get_file (NAUTILUS_VIEW_ITEM (item));
 
+    /* Only folders can carry the archived group. */
+    if (!nautilus_file_is_directory (file))
+    {
+        return TRUE;
+    }
+
+    /* Extension info providers run asynchronously after items enter the
+     * model. Until they have all run, a folder's group key is unknown:
+     * hide conservatively now, and let the re-evaluation pass
+     * (files-view's idle refilter) admit the non-archived ones. This
+     * keeps archived folders from flashing in for a frame. */
+    if (nautilus_file_is_extension_info_pending (file))
+    {
+        return FALSE;
+    }
+
     /* Reuse the grouped-view contract: the archived group key marks
      * folders to hide. NULL/other keys pass through untouched. */
     g_autofree char *group = nautilus_grouped_view_get_group_string (file);

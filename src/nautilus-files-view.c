@@ -9175,6 +9175,12 @@ archived_refilter_idle_callback (gpointer user_data)
     }
     update_hidden_group_card (self);
 
+    /* Re-evaluation can change the item count outside end_file_changes
+     * (attribute arrival admits non-archived folders); keep the
+     * empty-state overlay and toolbar sensitivity in sync. */
+    nautilus_files_view_update_status_overlay (self);
+    nautilus_files_view_update_toolbar_menus (self);
+
     return G_SOURCE_REMOVE;
 }
 

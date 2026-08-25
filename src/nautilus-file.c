@@ -7936,6 +7936,18 @@ nautilus_file_invalidate_extension_info_internal (NautilusFile *file)
         nautilus_module_get_extensions_for_type (NAUTILUS_TYPE_INFO_PROVIDER);
 }
 
+/* Whether the extension info providers have not all run yet. Extension
+ * attributes (e.g. the grouped-view "group" key) are only final once this
+ * returns FALSE; until then, getters may return NULL for a value that is
+ * still to come. Fork feature: see plus/docs/design/hidden-group-card.md. */
+gboolean
+nautilus_file_is_extension_info_pending (NautilusFile *file)
+{
+    g_return_val_if_fail (NAUTILUS_IS_FILE (file), FALSE);
+
+    return file->details->pending_info_providers != NULL;
+}
+
 void
 nautilus_file_invalidate_attributes_internal (NautilusFile           *file,
                                               NautilusFileAttributes  file_attributes)
