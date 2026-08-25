@@ -23,6 +23,8 @@ struct _NautilusArchivedFilter
     GtkFilter parent_instance;
 
     gboolean enabled;
+    gboolean setting_enabled;
+    gboolean temporarily_disabled;
     gulong settings_handler_id;
 };
 
@@ -31,8 +33,10 @@ G_DEFINE_TYPE (NautilusArchivedFilter, nautilus_archived_filter, GTK_TYPE_FILTER
 static void
 hide_archived_changed (NautilusArchivedFilter *self)
 {
+    self->setting_enabled =
+        g_settings_get_boolean (nautilus_preferences, "hide-archived");
     nautilus_archived_filter_set_enabled (
-        self, g_settings_get_boolean (nautilus_preferences, "hide-archived"));
+        self, self->setting_enabled && !self->temporarily_disabled);
 }
 
 static GtkFilterMatch
@@ -184,6 +188,23 @@ nautilus_archived_filter_set_enabled (NautilusArchivedFilter *self,
                         GTK_FILTER_CHANGE_LESS_STRICT);
 
     g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ENABLED]);
+}
+
+void
+nautilus_archived_filter_set_temporarily_disabled (NautilusArchivedFilter *self,
+                                                   gboolean                temporarily_disabled)
+{
+    g_return_if_fail (NAUTILUS_IS_ARCHIVED_FILTER (self));
+
+    temporarily_disabled = !!temporarily_disabled;
+    if (self->temporarily_disabled == temporarily_disabled)
+    {
+        return;
+    }
+
+    self->temporarily_disabled = temporarily_disabled;
+    nautilus_archived_filter_set_enabled (
+        self, self->setting_enabled && !self->temporarily_disabled);
 }
 
 gboolean

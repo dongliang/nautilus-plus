@@ -21,6 +21,7 @@
 #include "nautilus-file-utilities.h"
 #include "nautilus-global-preferences.h"
 #include "nautilus-grouped-view.h"
+#include "nautilus-hidden-group-card.h"
 #include "nautilus-label-cell.h"
 #include "nautilus-metadata.h"
 #include "nautilus-name-cell.h"
@@ -360,6 +361,20 @@ setup_row (GtkSignalListItemFactory *factory,
 }
 
 static void
+bind_row (GtkSignalListItemFactory *factory,
+          GtkColumnViewRow         *columnviewrow,
+          gpointer                  user_data)
+{
+    GtkTreeListRow *row = GTK_TREE_LIST_ROW (
+        gtk_column_view_row_get_item (columnviewrow));
+    g_autoptr (NautilusViewItem) item = NAUTILUS_VIEW_ITEM (
+        gtk_tree_list_row_get_item (row));
+
+    gtk_column_view_row_set_selectable (
+        columnviewrow, !nautilus_view_item_is_auxiliary (item));
+}
+
+static void
 setup_group_header (GtkSignalListItemFactory *factory,
                     GtkListHeader            *listheader,
                     gpointer                  user_data)
@@ -382,6 +397,14 @@ bind_group_header (GtkSignalListItemFactory *factory,
     GtkTreeListRow *row = GTK_TREE_LIST_ROW (gtk_list_header_get_item (listheader));
     g_autoptr (NautilusViewItem) item = NAUTILUS_VIEW_ITEM (gtk_tree_list_row_get_item (row));
     g_autofree char *group = NULL;
+
+    if (nautilus_view_item_is_auxiliary (item))
+    {
+        /* The tail card is already self-describing in its item row. It forms
+         * a separate final section but needs no additional group header. */
+        gtk_widget_set_visible (label, FALSE);
+        return;
+    }
 
     group = nautilus_grouped_view_get_group_string (nautilus_view_item_get_file (item));
 
@@ -410,6 +433,7 @@ create_view_ui (NautilusListView *self)
     gtk_widget_set_hexpand (widget, TRUE);
 
     g_signal_connect (row_factory, "setup", G_CALLBACK (setup_row), self);
+    g_signal_connect (row_factory, "bind", G_CALLBACK (bind_row), self);
 
     g_signal_connect (header_factory, "setup", G_CALLBACK (setup_group_header), self);
     g_signal_connect (header_factory, "bind", G_CALLBACK (bind_group_header), self);
@@ -887,9 +911,17 @@ setup_name_cell (GtkSignalListItemFactory *factory,
 {
     NautilusListView *self = NAUTILUS_LIST_VIEW (user_data);
     NautilusViewCell *cell;
+    GtkWidget *stack;
+    GtkWidget *card_slot;
 
+    stack = gtk_stack_new ();
+    card_slot = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
     cell = nautilus_name_cell_new (NAUTILUS_LIST_BASE (self));
-    gtk_column_view_cell_set_child (listitem, GTK_WIDGET (cell));
+    gtk_stack_add_named (GTK_STACK (stack), GTK_WIDGET (cell), "file");
+    gtk_stack_add_named (GTK_STACK (stack), card_slot, "card");
+    gtk_column_view_cell_set_child (listitem, stack);
+    g_object_set_data (G_OBJECT (listitem), "file-cell", cell);
+    g_object_set_data (G_OBJECT (listitem), "card-slot", card_slot);
     setup_cell_common (G_OBJECT (listitem), cell);
     setup_cell_hover_inner_target (cell, nautilus_name_cell_get_content (NAUTILUS_NAME_CELL (cell)));
 
@@ -948,18 +980,45 @@ on_row_children_changed (GObject    *gobject,
 }
 
 static void
+clear_list_card_slot (GtkWidget *slot)
+{
+    GtkWidget *child = gtk_widget_get_first_child (slot);
+
+    if (child != NULL)
+    {
+        gtk_box_remove (GTK_BOX (slot), child);
+    }
+}
+
+static void
 bind_name_cell (GtkSignalListItemFactory *factory,
                 GtkColumnViewCell        *listitem,
                 gpointer                  user_data)
 {
-    GtkWidget *cell;
     NautilusListView *self = user_data;
-    g_autoptr (NautilusViewItem) item = NULL;
+    GtkWidget *stack = gtk_column_view_cell_get_child (listitem);
+    GtkWidget *cell = g_object_get_data (G_OBJECT (listitem), "file-cell");
+    GtkWidget *card_slot = g_object_get_data (G_OBJECT (listitem), "card-slot");
+    g_autoptr (NautilusViewItem) item = get_view_item (listitem);
+    GObject *auxiliary = nautilus_view_item_get_auxiliary (item);
 
-    cell = gtk_column_view_cell_get_child (listitem);
-    item = get_view_item (listitem);
+    if (NAUTILUS_IS_HIDDEN_GROUP_CARD (auxiliary))
+    {
+        GtkWidget *card;
+        guint icon_size;
 
-    nautilus_view_item_set_item_ui (item, gtk_column_view_cell_get_child (listitem));
+        g_object_get (self, "icon-size", &icon_size, NULL);
+        clear_list_card_slot (card_slot);
+        card = nautilus_hidden_group_card_create_widget (
+            NAUTILUS_HIDDEN_GROUP_CARD (auxiliary), FALSE, icon_size);
+        gtk_widget_set_hexpand (card, TRUE);
+        gtk_box_append (GTK_BOX (card_slot), card);
+        gtk_stack_set_visible_child_name (GTK_STACK (stack), "card");
+        return;
+    }
+
+    gtk_stack_set_visible_child_name (GTK_STACK (stack), "file");
+    nautilus_view_item_set_item_ui (item, cell);
 
     if (self->expand_as_a_tree)
     {
@@ -983,6 +1042,7 @@ unbind_name_cell (GtkSignalListItemFactory *factory,
                   gpointer                  user_data)
 {
     NautilusListView *self = user_data;
+    GtkWidget *card_slot = g_object_get_data (G_OBJECT (listitem), "card-slot");
     g_autoptr (NautilusViewItem) item = NULL;
 
     item = get_view_item (listitem);
@@ -992,6 +1052,12 @@ unbind_name_cell (GtkSignalListItemFactory *factory,
         return;
     }
     g_return_if_fail (NAUTILUS_IS_VIEW_ITEM (item));
+
+    if (nautilus_view_item_is_auxiliary (item))
+    {
+        clear_list_card_slot (card_slot);
+        return;
+    }
 
     nautilus_view_item_set_item_ui (item, NULL);
 
@@ -1004,6 +1070,18 @@ unbind_name_cell (GtkSignalListItemFactory *factory,
                                               on_row_children_changed,
                                               self);
     }
+}
+
+static void
+bind_non_name_cell (GtkSignalListItemFactory *factory,
+                    GtkColumnViewCell        *listitem,
+                    gpointer                  user_data)
+{
+    g_autoptr (NautilusViewItem) item = get_view_item (listitem);
+    gboolean auxiliary = nautilus_view_item_is_auxiliary (item);
+
+    gtk_widget_set_visible (gtk_column_view_cell_get_child (listitem),
+                            !auxiliary);
 }
 
 static void
@@ -1088,6 +1166,7 @@ setup_view_columns (NautilusListView *self)
         else if (g_strcmp0 (name, "starred") == 0)
         {
             g_signal_connect (factory, "setup", G_CALLBACK (setup_star_cell), self);
+            g_signal_connect (factory, "bind", G_CALLBACK (bind_non_name_cell), self);
 
             gtk_column_view_column_set_title (view_column, "");
             gtk_column_view_column_set_resizable (view_column, FALSE);
@@ -1097,6 +1176,7 @@ setup_view_columns (NautilusListView *self)
         else
         {
             g_signal_connect (factory, "setup", G_CALLBACK (setup_label_cell), self);
+            g_signal_connect (factory, "bind", G_CALLBACK (bind_non_name_cell), self);
         }
 
         gtk_column_view_append_column (self->view_ui, view_column);

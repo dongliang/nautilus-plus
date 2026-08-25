@@ -1,6 +1,6 @@
 # 功能设计:右键空白处切换显示/隐藏归档文件夹
 
-状态:**已实现**(C 过滤器 + Python 开关,2026-08-22)
+状态:**已实现**(C 过滤器 + Python 开关,2026-08-22);隐藏时视图末尾的**汇总卡片**见 `hidden-group-card.md`(2026-08-26)
 
 ## 背景
 
@@ -84,6 +84,7 @@ nautilus-python 扩展同时被系统 nautilus 加载,但系统 nautilus 没有 
 - 开关切换后重过滤由 `gtk_filter_changed` 增量驱动;无位移场景(view-model sort 补发 sections-changed 已处理)
 - FileChooser 场景(mode != BROWSE):归档过滤也生效——打开/保存对话框里隐藏归档文件夹语义一致,接受
 - 树形展开模式经 create_model_func 的 filter 绑定自动生效
+- 隐藏状态下视图末尾会出现「已归档」汇总卡片(数量 + 部分名称,点击临时显示、导航后恢复),见 `hidden-group-card.md`
 
 ## 验证
 

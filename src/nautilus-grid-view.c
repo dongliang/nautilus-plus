@@ -10,6 +10,7 @@
 #include "nautilus-global-preferences.h"
 #include "nautilus-grid-cell.h"
 #include "nautilus-grouped-view.h"
+#include "nautilus-hidden-group-card.h"
 #include "nautilus-list-base-private.h"
 #include "nautilus-view-cell.h"
 #include "nautilus-view-item.h"
@@ -411,29 +412,59 @@ finalize (GObject *object)
 }
 
 static void
+clear_card_slot (GtkWidget *slot)
+{
+    GtkWidget *child = gtk_widget_get_first_child (slot);
+
+    if (child != NULL)
+    {
+        gtk_box_remove (GTK_BOX (slot), child);
+    }
+}
+
+static void
 bind_cell (GtkSignalListItemFactory *factory,
            GtkListItem              *listitem,
            gpointer                  user_data)
 {
-    GtkWidget *cell;
-    g_autoptr (NautilusViewItem) item = NULL;
+    NautilusGridView *self = NAUTILUS_GRID_VIEW (user_data);
+    GtkWidget *stack = gtk_list_item_get_child (listitem);
+    GtkWidget *cell = g_object_get_data (G_OBJECT (listitem), "file-cell");
+    GtkWidget *card_slot = g_object_get_data (G_OBJECT (listitem), "card-slot");
+    g_autoptr (NautilusViewItem) item = get_view_item (listitem);
+    GObject *auxiliary;
 
-    cell = gtk_list_item_get_child (listitem);
-    item = get_view_item (listitem);
     g_return_if_fail (item != NULL);
+    auxiliary = nautilus_view_item_get_auxiliary (item);
 
+    if (NAUTILUS_IS_HIDDEN_GROUP_CARD (auxiliary))
+    {
+        GtkWidget *card;
+        guint icon_size;
+
+        g_object_get (self, "icon-size", &icon_size, NULL);
+        clear_card_slot (card_slot);
+        card = nautilus_hidden_group_card_create_widget (
+            NAUTILUS_HIDDEN_GROUP_CARD (auxiliary), TRUE, icon_size);
+        gtk_box_append (GTK_BOX (card_slot), card);
+        gtk_stack_set_visible_child_name (GTK_STACK (stack), "card");
+        gtk_list_item_set_selectable (listitem, FALSE);
+        gtk_widget_set_halign (stack, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign (stack, GTK_ALIGN_START);
+        return;
+    }
+
+    gtk_stack_set_visible_child_name (GTK_STACK (stack), "file");
+    gtk_list_item_set_selectable (listitem, TRUE);
     nautilus_view_item_set_item_ui (item, cell);
 
     if (nautilus_view_cell_once (NAUTILUS_VIEW_CELL (cell)))
     {
-        GtkWidget *parent;
-
         /* At the time of ::setup emission, the item ui has got no parent yet,
          * that's why we need to complete the widget setup process here, on the
          * first time ::bind is emitted. */
-        parent = gtk_widget_get_parent (cell);
-        gtk_widget_set_halign (parent, GTK_ALIGN_CENTER);
-        gtk_widget_set_valign (parent, GTK_ALIGN_START);
+        gtk_widget_set_halign (stack, GTK_ALIGN_CENTER);
+        gtk_widget_set_valign (stack, GTK_ALIGN_START);
     }
 }
 
@@ -442,14 +473,17 @@ unbind_cell (GtkSignalListItemFactory *factory,
              GtkListItem              *listitem,
              gpointer                  user_data)
 {
-    g_autoptr (NautilusViewItem) item = NULL;
-
-    item = get_view_item (listitem);
+    GtkWidget *card_slot = g_object_get_data (G_OBJECT (listitem), "card-slot");
+    g_autoptr (NautilusViewItem) item = get_view_item (listitem);
 
     /* item may be NULL when row has just been destroyed. */
-    if (item != NULL)
+    if (item != NULL && !nautilus_view_item_is_auxiliary (item))
     {
         nautilus_view_item_set_item_ui (item, NULL);
+    }
+    if (card_slot != NULL)
+    {
+        clear_card_slot (card_slot);
     }
 }
 
@@ -460,10 +494,18 @@ setup_cell (GtkSignalListItemFactory *factory,
 {
     NautilusGridView *self = NAUTILUS_GRID_VIEW (user_data);
     NautilusGridCell *cell;
+    GtkWidget *stack;
+    GtkWidget *card_slot;
     GtkExpression *expression;
 
+    stack = gtk_stack_new ();
+    card_slot = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
     cell = nautilus_grid_cell_new (NAUTILUS_LIST_BASE (self));
-    gtk_list_item_set_child (listitem, GTK_WIDGET (cell));
+    gtk_stack_add_named (GTK_STACK (stack), GTK_WIDGET (cell), "file");
+    gtk_stack_add_named (GTK_STACK (stack), card_slot, "card");
+    gtk_list_item_set_child (listitem, stack);
+    g_object_set_data (G_OBJECT (listitem), "file-cell", cell);
+    g_object_set_data (G_OBJECT (listitem), "card-slot", card_slot);
     setup_cell_common (G_OBJECT (listitem), NAUTILUS_VIEW_CELL (cell));
     setup_cell_hover (NAUTILUS_VIEW_CELL (cell));
 

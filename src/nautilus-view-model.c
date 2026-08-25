@@ -10,22 +10,32 @@
  *
  * Internal structure goes like this:
  *
- * selection_model : GtkSelectionModel<GtkTreeListRow<NautilusViewItem>>
+ * selection_model : GtkSelectionModel<GtkTreeListRow<GObject>>
  *  |
- *  +-- sort_model : GtkSectionModel<GtkTreeListRow<NautilusViewItem>>
+ *  +-- flatten_model : GtkSectionModel<GtkTreeListRow<GObject>>
  *       |
- *       +-- tree_model : GtkTreeListModel<GtkTreeListRow<NautilusViewItem>>
+ *       +-- model_list : GListStore<GListModel>
  *            |
- *            +-- root_filter_model : GtkFilterListModel<NautilusViewItem>
+ *            +-- sort_model : GtkSectionModel<GtkTreeListRow<NautilusViewItem>>
  *            |    |
- *            |    +-- GListStore<NautilusViewItem>
+ *            |    +-- tree_model : GtkTreeListModel<GtkTreeListRow<NautilusViewItem>>
+ *            |         |
+ *            |         +-- root_filter_model : GtkFilterListModel<NautilusViewItem>
+ *            |         |    |
+ *            |         |    +-- GListStore<NautilusViewItem>
+ *            |         |
+ *            |      (0...n) GtkFilterListModel<NautilusViewItem>  //subdirectories
+ *            |              |
+ *            |              +-- GListStore<NautilusViewItem>
  *            |
- *         (0...n) GtkFilterListModel<NautilusViewItem>  //subdirectories
+ *            +-- optional tail_tree_model : GtkTreeListModel<GtkTreeListRow<GObject>>
  *                 |
- *                 +-- GListStore<NautilusViewItem>
+ *                 +-- caller-owned tail model (hidden-group card, 0 or 1 item)
  *
- * The overall model item type is GtkTreeListRow, but the :filter and :sorter
- * properties are meant for internal models whose item type is NautilusViewItem.
+ * The regular model item type remains GtkTreeListRow. The optional tail model
+ * is concatenated after sorting/filtering and is never handed to file sorters.
+ * It is used for independent non-file cards; see hidden-group-card.md.
+ * The :filter and :sorter properties still target the internal file models.
  */
 
 struct _NautilusViewModel
@@ -38,6 +48,9 @@ struct _NautilusViewModel
     GtkFilterListModel *root_filter_model;
     GtkTreeListModel *tree_model;
     GtkSortListModel *sort_model;
+    GListStore *model_list;
+    GtkFlattenListModel *flatten_model;
+    GtkTreeListModel *tail_tree_model;
     GtkSelectionModel *selection_model;
 
     gboolean single_selection;
@@ -71,12 +84,12 @@ nautilus_view_model_get_n_items (GListModel *list)
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (list);
 
-    if (self->tree_model == NULL)
+    if (self->flatten_model == NULL)
     {
         return 0;
     }
 
-    return g_list_model_get_n_items (G_LIST_MODEL (self->tree_model));
+    return g_list_model_get_n_items (G_LIST_MODEL (self->flatten_model));
 }
 
 static gpointer
@@ -85,12 +98,12 @@ nautilus_view_model_get_item (GListModel *list,
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (list);
 
-    if (self->sort_model == NULL)
+    if (self->flatten_model == NULL)
     {
         return NULL;
     }
 
-    return g_list_model_get_item (G_LIST_MODEL (self->sort_model), position);
+    return g_list_model_get_item (G_LIST_MODEL (self->flatten_model), position);
 }
 
 static void
@@ -109,7 +122,7 @@ nautilus_view_model_get_section (GtkSectionModel *model,
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (model);
 
-    gtk_section_model_get_section (GTK_SECTION_MODEL (self->sort_model), position, out_start, out_end);
+    gtk_section_model_get_section (GTK_SECTION_MODEL (self->flatten_model), position, out_start, out_end);
 }
 
 static void
@@ -118,11 +131,23 @@ nautilus_view_model_section_model_init (GtkSectionModelInterface *iface)
     iface->get_section = nautilus_view_model_get_section;
 }
 
+static guint
+get_regular_n_items (NautilusViewModel *self)
+{
+    return self->sort_model == NULL ? 0 :
+           g_list_model_get_n_items (G_LIST_MODEL (self->sort_model));
+}
+
 static gboolean
 nautilus_view_model_is_selected (GtkSelectionModel *model,
                                  guint              position)
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (model);
+
+    if (position >= get_regular_n_items (self))
+    {
+        return FALSE;
+    }
 
     return gtk_selection_model_is_selected (self->selection_model, position);
 }
@@ -133,8 +158,18 @@ nautilus_view_model_get_selection_in_range (GtkSelectionModel *model,
                                             guint              n_items)
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (model);
+    GtkBitset *selection;
+    guint regular_n_items = get_regular_n_items (self);
 
-    return gtk_selection_model_get_selection_in_range (self->selection_model, pos, n_items);
+    selection = gtk_selection_model_get_selection_in_range (self->selection_model, pos, n_items);
+    if (pos + n_items > regular_n_items)
+    {
+        gtk_bitset_remove_range (selection,
+                                 MAX (pos, regular_n_items),
+                                 pos + n_items - MAX (pos, regular_n_items));
+    }
+
+    return selection;
 }
 
 static gboolean
@@ -143,6 +178,11 @@ nautilus_view_model_select_item (GtkSelectionModel *model,
                                  gboolean           unselect_rest)
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (model);
+
+    if (position >= get_regular_n_items (self))
+    {
+        return FALSE;
+    }
 
     return gtk_selection_model_select_item (self->selection_model, position, unselect_rest);
 }
@@ -153,8 +193,26 @@ nautilus_view_model_set_selection (GtkSelectionModel *model,
                                    GtkBitset         *mask)
 {
     NautilusViewModel *self = NAUTILUS_VIEW_MODEL (model);
+    g_autoptr (GtkBitset) selected_copy = gtk_bitset_copy (selected);
+    g_autoptr (GtkBitset) mask_copy = gtk_bitset_copy (mask);
+    guint regular_n_items = get_regular_n_items (self);
+    guint total_n_items = g_list_model_get_n_items (G_LIST_MODEL (self->flatten_model));
 
-    return gtk_selection_model_set_selection (self->selection_model, selected, mask);
+    if (total_n_items > regular_n_items)
+    {
+        gtk_bitset_remove_range (selected_copy,
+                                 regular_n_items,
+                                 total_n_items - regular_n_items);
+        /* Include the tail in the mask as unselected, so a stale selection
+         * cannot survive a tail-model update. */
+        gtk_bitset_add_range (mask_copy,
+                              regular_n_items,
+                              total_n_items - regular_n_items);
+    }
+
+    return gtk_selection_model_set_selection (self->selection_model,
+                                              selected_copy,
+                                              mask_copy);
 }
 
 
@@ -216,22 +274,23 @@ dispose (GObject *object)
         g_signal_handlers_disconnect_by_func (self->selection_model,
                                               gtk_selection_model_selection_changed,
                                               self);
-        g_object_unref (self->selection_model);
-        self->selection_model = NULL;
+        g_clear_object (&self->selection_model);
     }
 
-    if (self->sort_model != NULL)
+    if (self->flatten_model != NULL)
     {
-        g_signal_handlers_disconnect_by_func (self->sort_model,
+        g_signal_handlers_disconnect_by_func (self->flatten_model,
                                               g_list_model_items_changed,
                                               self);
-        g_signal_handlers_disconnect_by_func (self->sort_model,
+        g_signal_handlers_disconnect_by_func (self->flatten_model,
                                               gtk_section_model_sections_changed,
                                               self);
-        g_object_unref (self->sort_model);
-        self->sort_model = NULL;
+        g_clear_object (&self->flatten_model);
     }
 
+    g_clear_object (&self->tail_tree_model);
+    g_clear_object (&self->model_list);
+    g_clear_object (&self->sort_model);
     g_clear_object (&self->tree_model);
     g_clear_object (&self->root_filter_model);
 
@@ -365,27 +424,33 @@ constructed (GObject *object)
                                                 self, NULL);
     self->sort_model = gtk_sort_list_model_new (g_object_ref (G_LIST_MODEL (self->tree_model)), NULL);
 
+    /* Keep the regular sorted file rows as the first flattened child. A
+     * caller may append one independently-modelled tail section (the hidden
+     * group card) without entering the file sorter/filter pipeline. */
+    self->model_list = g_list_store_new (G_TYPE_LIST_MODEL);
+    g_list_store_append (self->model_list, self->sort_model);
+    self->flatten_model = gtk_flatten_list_model_new (g_object_ref (G_LIST_MODEL (self->model_list)));
+
     if (self->single_selection)
     {
-        GtkSingleSelection *single = gtk_single_selection_new (NULL);
+        GtkSingleSelection *single = gtk_single_selection_new (g_object_ref (G_LIST_MODEL (self->flatten_model)));
 
         gtk_single_selection_set_autoselect (single, FALSE);
         gtk_single_selection_set_can_unselect (single, TRUE);
 
-        gtk_single_selection_set_model (single, G_LIST_MODEL (self->sort_model));
         self->selection_model = GTK_SELECTION_MODEL (single);
     }
     else
     {
-        self->selection_model = GTK_SELECTION_MODEL (gtk_multi_selection_new (g_object_ref (G_LIST_MODEL (self->sort_model))));
+        self->selection_model = GTK_SELECTION_MODEL (gtk_multi_selection_new (g_object_ref (G_LIST_MODEL (self->flatten_model))));
     }
 
     self->map_files_to_model = g_hash_table_new (NULL, NULL);
     self->directory_reverse_map = g_hash_table_new_full (NULL, NULL, NULL, g_object_unref);
 
-    g_signal_connect_swapped (self->sort_model, "items-changed",
+    g_signal_connect_swapped (self->flatten_model, "items-changed",
                               G_CALLBACK (g_list_model_items_changed), self);
-    g_signal_connect_swapped (self->sort_model, "sections-changed",
+    g_signal_connect_swapped (self->flatten_model, "sections-changed",
                               G_CALLBACK (gtk_section_model_sections_changed), self);
     g_signal_connect_swapped (self->selection_model, "selection-changed",
                               G_CALLBACK (gtk_selection_model_selection_changed), self);
@@ -444,6 +509,61 @@ nautilus_view_model_new (gboolean single_selection)
     return g_object_new (NAUTILUS_TYPE_VIEW_MODEL,
                          "single-selection", single_selection,
                          NULL);
+}
+
+static GListModel *
+create_empty_child_model (gpointer item,
+                          gpointer user_data)
+{
+    return NULL;
+}
+
+void
+nautilus_view_model_set_tail_model (NautilusViewModel *self,
+                                    GListModel        *tail_model)
+{
+    g_return_if_fail (NAUTILUS_IS_VIEW_MODEL (self));
+    g_return_if_fail (tail_model == NULL || G_IS_LIST_MODEL (tail_model));
+
+    if (self->tail_tree_model != NULL)
+    {
+        /* The regular sort model always occupies index zero. */
+        g_list_store_remove (self->model_list, 1);
+        g_clear_object (&self->tail_tree_model);
+    }
+
+    if (tail_model == NULL)
+    {
+        return;
+    }
+
+    self->tail_tree_model =
+        gtk_tree_list_model_new (g_object_ref (tail_model),
+                                 FALSE, FALSE,
+                                 create_empty_child_model,
+                                 NULL, NULL);
+    g_list_store_append (self->model_list, self->tail_tree_model);
+}
+
+GPtrArray *
+nautilus_view_model_dup_unfiltered_root_items (NautilusViewModel *self)
+{
+    g_autoptr (GPtrArray) items = NULL;
+    GListModel *root_store;
+    guint n_items;
+
+    g_return_val_if_fail (NAUTILUS_IS_VIEW_MODEL (self), NULL);
+
+    items = g_ptr_array_new_with_free_func (g_object_unref);
+    root_store = gtk_filter_list_model_get_model (self->root_filter_model);
+    n_items = g_list_model_get_n_items (root_store);
+
+    for (guint i = 0; i < n_items; i++)
+    {
+        g_ptr_array_add (items, g_list_model_get_item (root_store, i));
+    }
+
+    return g_steal_pointer (&items);
 }
 
 GtkFilter *

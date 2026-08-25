@@ -111,7 +111,16 @@ nautilus_view_cell_set_property (GObject      *object,
 
         case PROP_ITEM:
         {
-            g_set_object (&priv->item, g_value_get_object (value));
+            NautilusViewItem *item = g_value_get_object (value);
+
+            /* Auxiliary tail items (e.g. hidden-group cards) deliberately
+             * have no NautilusFile. File cells must stay unbound; their view
+             * factories render the auxiliary payload separately. */
+            if (item != NULL && nautilus_view_item_get_file (item) == NULL)
+            {
+                item = NULL;
+            }
+            g_set_object (&priv->item, item);
         }
         break;
 

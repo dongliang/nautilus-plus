@@ -23,6 +23,9 @@ G_DECLARE_FINAL_TYPE (NautilusArchivedFilter, nautilus_archived_filter,
  * Part of the hide-archived feature: see plus/docs/design/hide-archived.md */
 NautilusArchivedFilter *nautilus_archived_filter_new (void);
 
+void nautilus_archived_filter_set_temporarily_disabled (NautilusArchivedFilter *self,
+                                                        gboolean                temporarily_disabled);
+
 void nautilus_archived_filter_set_enabled (NautilusArchivedFilter *self,
                                            gboolean                enabled);
 

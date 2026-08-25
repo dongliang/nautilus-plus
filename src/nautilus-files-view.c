@@ -79,6 +79,8 @@
 #include "nautilus-view-item.h"
 #include "nautilus-view-model.h"
 #include "nautilus-archived-filter.h"
+#include "nautilus-grouped-view.h"
+#include "nautilus-hidden-group-card.h"
 #include "nautilus-window-slot.h"
 
 /* Minimum starting update interval */
@@ -162,6 +164,11 @@ struct _NautilusFilesView
     NautilusArchivedFilter *archived_filter;
     GtkFilter *combined_filter;
     gulong slot_filter_notify_id;
+    guint archived_refilter_idle;
+
+    GListStore *hidden_group_card_store;
+    NautilusHiddenGroupCard *hidden_group_card;
+    NautilusViewItem *hidden_group_card_item;
 
     NautilusQuery *search_query;
     GFile *location_before_search;
@@ -300,6 +307,8 @@ static void     schedule_update_status (NautilusFilesView *view);
 static void     remove_update_status_idle_callback (NautilusFilesView *view);
 static void     reset_update_interval (NautilusFilesView *view);
 static void     schedule_idle_display_of_pending_files (NautilusFilesView *view);
+static void     schedule_archived_refilter (NautilusFilesView *self);
+static void     update_hidden_group_card (NautilusFilesView *self);
 static void     unschedule_display_of_pending_files (NautilusFilesView *view);
 static void     disconnect_directory_handlers (NautilusFilesView *view);
 static void     metadata_for_directory_as_file_ready_callback (NautilusFile *file,
@@ -3325,9 +3334,14 @@ nautilus_files_view_dispose (GObject *object)
     g_clear_object (&self->location);
     g_clear_object (&self->selection);
 
+    g_clear_handle_id (&self->archived_refilter_idle, g_source_remove);
+
     g_clear_signal_handler (&self->slot_filter_notify_id, self->slot);
     g_clear_object (&self->combined_filter);
     g_clear_object (&self->archived_filter);
+    g_clear_object (&self->hidden_group_card_store);
+    g_clear_object (&self->hidden_group_card_item);
+    g_clear_object (&self->hidden_group_card);
 
     g_clear_object (&self->model);
 
@@ -3627,6 +3641,16 @@ nautilus_files_view_set_location (NautilusFilesView *self,
                                   GFile             *location)
 {
     g_autoptr (NautilusDirectory) directory = nautilus_directory_get (location);
+
+    /* A card click reveals archived entries only until navigation. */
+    if (self->archived_filter != NULL)
+    {
+        nautilus_archived_filter_set_temporarily_disabled (self->archived_filter, FALSE);
+    }
+    if (self->hidden_group_card_store != NULL)
+    {
+        g_list_store_remove_all (self->hidden_group_card_store);
+    }
 
     if (NAUTILUS_IS_SEARCH_DIRECTORY (directory))
     {
@@ -4054,6 +4078,8 @@ static void
 files_view_end_file_changes (NautilusFilesView *self)
 {
     nautilus_view_model_sort (self->model);
+    update_hidden_group_card (self);
+    schedule_archived_refilter (self);
 
     /* Addition and removal of files modify the empty state */
     nautilus_files_view_update_status_overlay (self);
@@ -4203,6 +4229,11 @@ files_view_file_changed (NautilusFilesView *self,
     if (item != NULL)
     {
         nautilus_view_item_file_changed (item);
+
+        /* A changed file may have just gained its extension group attribute
+         * (info providers run asynchronously after items enter the model).
+         * Re-evaluate the archived filter so such items leave the view. */
+        schedule_archived_refilter (self);
     }
     else
     {
@@ -9125,6 +9156,123 @@ nautilus_files_view_is_loading (NautilusFilesView *self)
     return self->loading;
 }
 
+static gboolean
+archived_refilter_idle_callback (gpointer user_data)
+{
+    NautilusFilesView *self = NAUTILUS_FILES_VIEW (user_data);
+
+    self->archived_refilter_idle = 0;
+
+    /* The extension group attribute is provided asynchronously (idle), so
+     * matches performed while items entered the model may have seen no group
+     * key yet. Re-evaluate once per batch so items that just gained the
+     * archived group leave the view. */
+    if (self->archived_filter != NULL &&
+        nautilus_archived_filter_get_enabled (self->archived_filter))
+    {
+        gtk_filter_changed (GTK_FILTER (self->archived_filter),
+                            GTK_FILTER_CHANGE_DIFFERENT);
+    }
+    update_hidden_group_card (self);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+schedule_archived_refilter (NautilusFilesView *self)
+{
+    if (self->archived_refilter_idle == 0)
+    {
+        self->archived_refilter_idle =
+            g_idle_add (archived_refilter_idle_callback, self);
+    }
+}
+
+static void
+hidden_group_card_activated (NautilusFilesView *self)
+{
+    /* Session-local reveal: keep the persisted hide-archived preference, but
+     * disable this view's filter until navigation resets the override. */
+    nautilus_archived_filter_set_temporarily_disabled (self->archived_filter, TRUE);
+    update_hidden_group_card (self);
+}
+
+static void
+update_hidden_group_card (NautilusFilesView *self)
+{
+    g_autoptr (GPtrArray) items = NULL;
+    g_autoptr (GString) details = NULL;
+    static GQuark name_zh_quark;
+    guint count = 0;
+    guint shown = 0;
+
+    if (self->hidden_group_card_store == NULL || self->model == NULL)
+    {
+        return;
+    }
+
+    if (!nautilus_archived_filter_get_enabled (self->archived_filter))
+    {
+        g_list_store_remove_all (self->hidden_group_card_store);
+        return;
+    }
+
+    if (G_UNLIKELY (name_zh_quark == 0))
+    {
+        name_zh_quark = g_quark_from_static_string ("name-zh");
+    }
+
+    details = g_string_new (NULL);
+    items = nautilus_view_model_dup_unfiltered_root_items (self->model);
+    for (guint i = 0; i < items->len; i++)
+    {
+        NautilusViewItem *item = g_ptr_array_index (items, i);
+        NautilusFile *file = nautilus_view_item_get_file (item);
+        g_autofree char *group = nautilus_grouped_view_get_group_string (file);
+
+        if (g_strcmp0 (group, ARCHIVED_GROUP_KEY) != 0)
+        {
+            continue;
+        }
+
+        count++;
+        if (shown < 3)
+        {
+            g_autofree char *name_zh =
+                nautilus_file_get_extension_attribute (file, name_zh_quark);
+            const char *name = (name_zh != NULL && name_zh[0] != '\0') ?
+                               name_zh : nautilus_file_get_display_name (file);
+
+            if (details->len > 0)
+            {
+                g_string_append (details, "、");
+            }
+            g_string_append (details, name);
+            shown++;
+        }
+    }
+
+    if (count == 0)
+    {
+        g_list_store_remove_all (self->hidden_group_card_store);
+        return;
+    }
+
+    if (count > shown)
+    {
+        g_string_append_printf (details, " 等 %u 个", count);
+    }
+
+    nautilus_hidden_group_card_set_summary (self->hidden_group_card,
+                                            count,
+                                            details->str);
+    if (g_list_model_get_n_items (G_LIST_MODEL (self->hidden_group_card_store)) == 0)
+    {
+        g_list_store_append (self->hidden_group_card_store,
+                             self->hidden_group_card_item);
+    }
+}
+
 static void
 slot_filter_changed_cb (NautilusFilesView *self)
 {
@@ -9177,6 +9325,21 @@ nautilus_files_view_constructed (GObject *object)
                                  G_CALLBACK (slot_filter_changed_cb),
                                  self, G_CONNECT_SWAPPED);
     slot_filter_changed_cb (self);
+
+    self->hidden_group_card_store =
+        g_list_store_new (NAUTILUS_TYPE_VIEW_ITEM);
+    self->hidden_group_card =
+        nautilus_hidden_group_card_new (ARCHIVED_GROUP_KEY);
+    self->hidden_group_card_item =
+        nautilus_view_item_new_auxiliary (G_OBJECT (self->hidden_group_card));
+    g_signal_connect_object (self->hidden_group_card, "activate",
+                             G_CALLBACK (hidden_group_card_activated),
+                             self, G_CONNECT_SWAPPED);
+    g_signal_connect_object (self->archived_filter, "notify::enabled",
+                             G_CALLBACK (update_hidden_group_card),
+                             self, G_CONNECT_SWAPPED);
+    nautilus_view_model_set_tail_model (
+        self->model, G_LIST_MODEL (self->hidden_group_card_store));
 
     /* GtkSelectionModel::selection-changed only notifies about individual item
      * selection state changes. Changes to the selection set require listening
