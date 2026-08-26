@@ -53,6 +53,7 @@ files_view_end_file_changes()
 
 - **计数数据源**:`nautilus_view_model_dup_unfiltered_root_items()` 取根 store 原文(过滤前),才能统计"被藏了多少"
 - **点击** → `hidden_group_card_activated()`:`nautilus_archived_filter_set_temporarily_disabled(TRUE)` —— 过滤器 `enabled = setting_enabled && !temporarily_disabled`,gsettings 里的持久化设置不动;条目即时回归,卡片消失(过滤器已禁用,统计为 0)
+- **全局开关变更** → `hide_archived_changed()` 先清除 `temporarily_disabled`,再按新的 gsettings 值更新 `enabled`;因此卡片临时显示后,无论切换「显示归档」还是「隐藏归档」,当前文件夹都会立即跟随全局状态,不会残留旧的临时显示覆盖。Python 侧仍刷新当前文件夹扩展属性并触发菜单标签更新,不做昂贵的目录重载
 - **导航重置**:`set_location()` 里 `set_temporarily_disabled(FALSE)` + 清空尾部 store,回到正常隐藏状态——临时显示只活到下一次导航
 - **多视图共享**:view model 每视图一个,卡片 store 在 files-view 里(每个 slot/view 一份),互不干扰
 

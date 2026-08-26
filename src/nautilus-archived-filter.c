@@ -35,8 +35,13 @@ hide_archived_changed (NautilusArchivedFilter *self)
 {
     self->setting_enabled =
         g_settings_get_boolean (nautilus_preferences, "hide-archived");
-    nautilus_archived_filter_set_enabled (
-        self, self->setting_enabled && !self->temporarily_disabled);
+
+    /* A global setting change starts a new visibility state. Do not let a
+     * previous card click keep this view in its temporary reveal state when
+     * the user turns hiding back on. The setter also re-evaluates enabled and
+     * emits the normal filter/notify signals when needed. */
+    nautilus_archived_filter_set_temporarily_disabled (self, FALSE);
+    nautilus_archived_filter_set_enabled (self, self->setting_enabled);
 }
 
 static GtkFilterMatch
