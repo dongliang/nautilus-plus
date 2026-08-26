@@ -84,6 +84,7 @@ nautilus-python 扩展同时被系统 nautilus 加载,但系统 nautilus 没有 
 - 开关切换后重过滤由 `gtk_filter_changed` 增量驱动;无位移场景(view-model sort 补发 sections-changed 已处理)
 - FileChooser 场景(mode != BROWSE):归档过滤也生效——打开/保存对话框里隐藏归档文件夹语义一致,接受
 - 树形展开模式经 create_model_func 的 filter 绑定自动生效
+- 隐藏归档开启时,首次目录 ready 会等待扩展属性和完整文件列表后再安装 monitor,避免归档状态未知时先显示再重排;动态新增仍用 pending 保守过滤和 idle 重评估。分组排序保证「已归档」组在普通组之后,组内沿用原有排序。细节见 `hidden-group-card.md`
 - 隐藏状态下视图末尾会出现「已归档」汇总卡片(数量 + 部分名称,点击临时显示、导航后恢复),见 `hidden-group-card.md`
 
 ## 验证

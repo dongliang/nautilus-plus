@@ -30,16 +30,29 @@ get_group_quark (void)
 }
 
 /* Compare two group keys. NULL and "" are both "ungrouped": equal to each
- * other, and smaller than any non-empty key. Non-empty keys by strcmp. */
+ * other, and smaller than any non-empty key. The archived group is always
+ * last; other non-empty keys retain their original strcmp ordering. */
 static gint
 compare_group_keys (const char *key_a,
                     const char *key_b)
 {
+    gboolean archived_a = g_strcmp0 (key_a, ARCHIVED_GROUP_KEY) == 0;
+    gboolean archived_b = g_strcmp0 (key_b, ARCHIVED_GROUP_KEY) == 0;
+
+    if (archived_a != archived_b)
+    {
+        return archived_a ? GTK_ORDERING_LARGER : GTK_ORDERING_SMALLER;
+    }
+    if (archived_a)
+    {
+        return GTK_ORDERING_EQUAL;
+    }
+
     if (key_a == NULL || key_a[0] == '\0')
     {
         if (key_b == NULL || key_b[0] == '\0')
         {
-            return 0;
+            return GTK_ORDERING_EQUAL;
         }
 
         return GTK_ORDERING_SMALLER;

@@ -8511,9 +8511,14 @@ load_directory (NautilusFilesView *self,
                 NautilusDirectory *directory)
 {
     NautilusFileAttributes attributes;
+    gboolean wait_for_archived_metadata;
 
     g_assert (NAUTILUS_IS_FILES_VIEW (self));
     g_assert (NAUTILUS_IS_DIRECTORY (directory));
+
+    wait_for_archived_metadata =
+        self->archived_filter != NULL &&
+        nautilus_archived_filter_get_enabled (self->archived_filter);
 
     nautilus_files_view_stop_loading (self);
 
@@ -8573,10 +8578,15 @@ load_directory (NautilusFilesView *self,
         (self->directory_as_file,
         attributes,
         metadata_for_directory_as_file_ready_callback, self);
+
+    if (wait_for_archived_metadata)
+    {
+        attributes |= NAUTILUS_FILE_ATTRIBUTE_EXTENSION_INFO;
+    }
     nautilus_directory_call_when_ready
         (self->directory,
         attributes,
-        FALSE,
+        wait_for_archived_metadata,
         metadata_for_files_in_directory_ready_callback, self);
 
     /* If capabilities change, then we need to update the menus

@@ -33,6 +33,8 @@ NautilusViewModel.model_list = GListStore<GListModel>
 
 - **拼接点**:`GtkFlattenListModel` 把「常规排序结果」与「尾部模型」拼成单条连续流,天然支持 section(卡片自成最后一节,列表视图出现独立组头——用 `bind_group_header` 对 auxiliary item 隐藏 label,卡片自身即组头)
 - **不进文件管线**:尾部模型不经过 `root_filter_model`/`tree_model`/`sort_model`,文件排序、过滤、子目录展开全部不受影响
+- **首次加载的 ready barrier**:隐藏归档开启时,`files-view` 在安装文件 monitor 前请求子项 `EXTENSION_INFO` 并等待完整文件列表;`nautilus-directory-async.c:request_is_satisfied()` 现在真正检查扩展 provider 是否完成。因此首次进入目录时,归档状态和分组主键已经参与初始排序,不会先按未知分组显示再整批重排;隐藏关闭时仍走原有快速增量加载路径
+- **归档组固定置底、组内规则不变**:共享 `compare_group_keys()` 把 `ARCHIVED_GROUP_KEY` 作为最后分组,普通组之间仍按原 `strcmp()`;GtkMultiSorter 后续继续使用原来的名称/日期/大小、directories-first 或网格排序器,所以只是分组位置改变,组内排序不变
 - **选中隔离**:view-model 的 `GtkSelectionModel` 转发器对尾部位置返回 FALSE(不可选/不可选中),`set_selection`/`get_selection_in_range` 主动剔除尾部位置;列表行 `gtk_column_view_row_set_selectable(FALSE)`
 - **卡片即按钮**:`NautilusHiddenGroupCard` 是纯 GObject(分组名/数量/明细属性 + `activate` 信号),`create_widget()` 按模式生成 `GtkButton`(CSS 类 `hidden-group-card`,网格竖排/列表横排),视图 bind 时装入预建的 `GtkStack`「card」页;`notify` 自动刷新 label
 
@@ -73,10 +75,10 @@ files_view_end_file_changes()
 
 ## 坑:过滤匹配先于扩展属性就绪
 
-扩展属性由 nautilus-python 的 info provider 以 idle 异步提供,而 items 在 `files_added` 后立即进入视图模型——**匹配发生在前、属性就绪在后**,初始加载(含导航重进)时归档条目会先放行;属性就绪后若无人触发重评估,条目将永远留在视图中(重进路径后"卡片在但归档未隐藏"即此症状)。
+扩展属性由 nautilus-python 的 info provider 以 idle 异步提供,而增量新增/属性失效更新可能在属性完成前进入视图模型——**匹配发生在前、属性就绪在后**。如果只依赖过滤器在属性到达后重评估,归档条目会先放行、再移除,并可能触发整批重排。
 
-修复(两件套):
+修复(三件套):
 
-1. **就绪后重评估**:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估并刷新卡片(dispose 时 `g_clear_handle_id` 清理)。文件清单就绪时属性尚未就绪,因此必须双触发——只靠 `end_file_changes`(done-loading 时点)覆盖不全。
-2. **就绪前保守隐藏**(避免"显示一瞬再隐藏"的闪动):`NautilusArchivedFilter::match` 对「目录且扩展属性仍在检索中(`nautilus_file_is_extension_info_pending`)」的条目直接返回 FALSE——归档文件夹从头到尾不出现,非归档文件夹在属性就绪后的重评估中正常回归;文件永不归档,直接放行不受影响。扩展未安装时 provider 列表为空、`pending` 恒为 FALSE,按原逻辑放行(安全退化)。
-3. **重评估后同步空状态**:保守隐藏会让「全文件夹目录」在属性就绪前显示为空,重评估放行后模型条目数变化发生在 `end_file_changes` 之外——`archived_refilter_idle_callback` 里除重过滤与卡片刷新外,还要调 `update_status_overlay`(收起「Folder is Empty」页)与 `update_toolbar_menus`(恢复排序/缩放可用),否则窗口停在"文件夹为空"。
+1. **首次加载 ready barrier**:`load_directory()` 在隐藏归档开启时把 `NAUTILUS_FILE_ATTRIBUTE_EXTENSION_INFO` 加入目录 ready 请求并设置 `wait_for_all_files=TRUE`;`request_is_satisfied()` 增加 `REQUEST_EXTENSION_INFO` 分支,用现有 provider pending 状态判断。首次安装 monitor/把条目交给视图前,扩展属性和文件列表已经完成,因此首次排序/过滤就是最终状态;隐藏关闭时不增加等待,保留原有速度。
+2. **就绪前保守隐藏**(动态增量避免"显示一瞬再隐藏"):`NautilusArchivedFilter::match` 对「目录且扩展属性仍在检索中(`nautilus_file_is_extension_info_pending`)」的条目直接返回 FALSE——新增归档文件夹不会闪现,非归档文件夹在属性就绪后的重评估中正常回归;文件永不归档,直接放行不受影响。扩展未安装时 provider 列表为空、`pending` 恒为 FALSE,按原逻辑放行(安全退化)。
+3. **就绪后重评估并同步 UI**:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估、刷新卡片、空状态页和工具栏(dispose 时 `g_clear_handle_id` 清理)。此兜底覆盖动态新增、外部修改 `.project.yaml` 和 provider 重新失效。
