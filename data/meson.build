@@ -134,6 +134,16 @@ install_data(
   install_dir: join_paths(datadir, 'glib-2.0', 'schemas')
 )
 
+# Fork-only settings ship in their own schema file. They must not be added to
+# the upstream org.gnome.nautilus.gschema.xml above: that path is owned by the
+# distribution's nautilus package, so a system upgrade replaces the file and
+# silently drops fork-only keys -- and reading a missing key aborts the
+# process. See plus/docs/pitfalls.md and plus/docs/design/hide-archived.md.
+install_data(
+  join_paths(meson.project_source_root(), 'plus', 'gschema', 'org.gnome.NautilusPlus.gschema.xml'),
+  install_dir: join_paths(datadir, 'glib-2.0', 'schemas')
+)
+
 desktop_file_validate = find_program('desktop-file-validate', required: false)
 if desktop_file_validate.found()
   if profile == 'Plus'

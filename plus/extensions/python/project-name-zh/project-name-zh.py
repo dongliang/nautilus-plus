@@ -23,11 +23,13 @@ local update as the Chinese-name editor.
 Archived folders can be hidden entirely (background context menu):
 the fork's C layer filters out items carrying the archived group key,
 so they vanish from icon view, list view (headers included) and search
-results, as if they did not exist. The switch state lives in the same
-state file as the captions switch (hide-archived=on/off line, default
-off = show). The hide menu item only appears when running as the fork
-(nautilus-plus): the stock nautilus has no filter hook, so the toggle
-would do nothing there.
+results, as if they did not exist. The switch state lives in the fork's own
+gsettings schema (org.gnome.NautilusPlus.preferences, default off = show),
+which the C filter reads directly; it is deliberately not stored in
+org.gnome.nautilus.preferences, whose file is owned by the distribution's
+nautilus package and would be overwritten on upgrade. The hide menu item
+only appears when running as the fork (nautilus-plus): the stock nautilus
+has no filter hook, so the toggle would do nothing there.
 
 A global on/off switch lives in the background context menu (right-click
 empty space in a folder). Toggling takes effect immediately, and the menu
@@ -56,7 +58,11 @@ STATE_FILE = os.path.join(CONFIG_DIR, 'state')
 CAPTIONS_BACKUP = os.path.join(CONFIG_DIR, 'captions-backup.json')
 
 ICON_VIEW_SCHEMA = 'org.gnome.nautilus.icon-view'
-PREFERENCES_SCHEMA = 'org.gnome.nautilus.preferences'
+# Fork-only settings live in the fork's own schema, never in
+# org.gnome.nautilus.preferences: that schema is owned by the distribution's
+# nautilus package, so a system upgrade replaces the file and drops fork-only
+# keys -- and reading a missing key aborts the process. See plus/docs/pitfalls.md.
+PLUS_SCHEMA = 'org.gnome.NautilusPlus.preferences'
 HIDE_ARCHIVED_KEY = 'hide-archived'
 CAPTIONS_KEY = 'captions'
 ATTR = 'name-zh'
@@ -67,7 +73,33 @@ YAML_NAME = '.project.yaml'
 YAML_MAX_SIZE = 1024 * 1024
 
 _settings = Gio.Settings.new(ICON_VIEW_SCHEMA)
-_preferences = Gio.Settings.new(PREFERENCES_SCHEMA)
+
+
+def _open_plus_settings():
+    """The fork's settings object, or None when its schema is not installed.
+
+    Must never raise: this module is also loaded by the stock nautilus, where
+    a failed import would take the whole extension down with it. Without the
+    schema the hide-archived feature simply stays unavailable.
+    """
+    try:
+        source = Gio.SettingsSchemaSource.get_default()
+        schema = source.lookup(PLUS_SCHEMA, True) if source is not None else None
+        if schema is None or not schema.has_key(HIDE_ARCHIVED_KEY):
+            print(f'project-name-zh: schema {PLUS_SCHEMA!r} is missing; '
+                  'hide-archived stays disabled until nautilus-plus is '
+                  'installed again.', file=sys.stderr)
+            return None
+        # new_full() takes the already-validated schema: a plain
+        # Settings.new() would abort the process (g_error, not a
+        # catchable exception) if the lookup ever came up empty.
+        return Gio.Settings.new_full(schema, None, None)
+    except Exception:
+        traceback.print_exc()
+        return None
+
+
+_plus_settings = _open_plus_settings()
 
 # folder_path -> (mtime, name_zh | None, archived: bool)
 _yaml_cache = {}
@@ -132,15 +164,19 @@ def _set_enabled(on):
 def _hide_archived():
     """Whether archived folders are hidden. Defaults to off (= show).
 
-    The state lives in the shared nautilus gsettings (fork-only key):
-    the C filter reads it directly, so every window follows instantly.
-    The stock nautilus never reads this key.
+    The state lives in the fork's gsettings schema: the C filter reads the
+    same key, so every window follows instantly. Without the schema (fork not
+    installed) this degrades to "show" instead of raising.
     """
-    return _preferences.get_boolean(HIDE_ARCHIVED_KEY)
+    if _plus_settings is None:
+        return False
+    return _plus_settings.get_boolean(HIDE_ARCHIVED_KEY)
 
 
 def _set_hide_archived(hide):
-    _preferences.set_boolean(HIDE_ARCHIVED_KEY, hide)
+    if _plus_settings is None:
+        return
+    _plus_settings.set_boolean(HIDE_ARCHIVED_KEY, hide)
 
 
 def _atomic_write(path, text, mode=None):
@@ -768,7 +804,9 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
 
         # Hide-archived needs the fork's C filter hook; in the stock
         # nautilus the toggle would do nothing, so don't offer it there.
-        if _running_as_plus():
+        # Same when the fork's schema is missing: don't show a control that
+        # cannot have any effect.
+        if _running_as_plus() and _plus_settings is not None:
             hide_item = Nautilus.MenuItem(
                 name='ProjectNameZh::ToggleHideArchived',
                 label='隐藏归档' if not _hide_archived() else '显示归档',

@@ -188,11 +188,6 @@
       <summary>How to display file timestamps in the views</summary>
       <description>If set to 'simple', Files will show Today and Yesterday with time, otherwise the exact date without time. If set to 'detailed', it will always show the exact date and time.</description>
     </key>
-    <key type="b" name="hide-archived">
-      <default>false</default>
-      <summary>Hide archived folders</summary>
-      <description>Fork-only key: hide folders whose "group" extension attribute marks them as archived (written by project-name-zh.py). The stock nautilus ignores this key.</description>
-    </key>
   </schema>
 
   <schema path="/org/gnome/nautilus/compression/" id="org.gnome.nautilus.compression" gettext-domain="nautilus">

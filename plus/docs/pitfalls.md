@@ -86,3 +86,20 @@
 - **现象**:`validate-appdata` 报 `metainfo-localized-description-tag` 错误
 - **原因**:AppStream 的 description 只能有一份,本地化走翻译系统,不允许按语言给整段 description 换内容
 - **处理**:`<name>`/`<summary>` 可以带 `xml:lang`,description 不行——中文说明并入同一个 description 的 `<p>` 里
+
+## 15. fork 专属键放进发行版包拥有的 schema 文件 → 系统升级后闪退
+
+- **现象**:全量 `pacman -Syu` 后 `nautilus-plus` 一开窗口就退出,stderr 只有一行:
+  `GLib-GIO-ERROR **: Settings schema 'org.gnome.nautilus.preferences' does not contain a key named 'hide-archived'`
+- **原因**:fork 把 `hide-archived` 加进了 `data/org.gnome.nautilus.gschema.xml`,而它安装到的
+  `/usr/share/glib-2.0/schemas/org.gnome.nautilus.gschema.xml` **由发行版的 `nautilus` 包拥有**。
+  包一升级,pacman 把文件换回上游版本 → fork 的键消失。而 `g_settings_get_boolean()` 读不存在的键是
+  `g_error()`(不是可捕获的异常/返回错误),进程直接 abort
+- **定位手法**:`pacman -Qo <schema 路径>` 看归属;`grep -c <键名> <已安装 schema>` 对比源码
+- **处理**:
+  1. 键迁到 fork 自有文件 `plus/gschema/org.gnome.NautilusPlus.gschema.xml`(schema id 也独立),
+     上游 schema 恢复原样 → 升级不再影响(见 `design/hide-archived.md`)
+  2. C/Python 两侧都先 `lookup()` + `has_key()` 再取设置对象,缺失时降级("显示归档")而非 abort。
+     **注意 Python 侧 `Gio.Settings.new()` 同样会 abort,`try/except` 抓不住**——必须先 lookup,
+     再用 `Settings.new_full(schema, None, None)`
+- **通用教训**:fork 的任何键/文件都不要落在发行版包拥有的路径上;读取第三方可能缺失的键时先做存在性检查

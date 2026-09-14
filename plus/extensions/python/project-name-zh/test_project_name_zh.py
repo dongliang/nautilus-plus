@@ -16,6 +16,10 @@ class _Settings:
     def new(cls, schema):
         return cls()
 
+    @classmethod
+    def new_full(cls, schema, backend, path):
+        return cls()
+
     def get_strv(self, key):
         return list(self.values.get(key, []))
 
@@ -66,8 +70,38 @@ class _Nautilus:
     FileInfo = _FileInfo
 
 
+class _SettingsSchema:
+    def __init__(self, keys):
+        self._keys = set(keys)
+
+    def has_key(self, key):
+        return key in self._keys
+
+
+class _SettingsSchemaSource:
+    """Stand-in for Gio.SettingsSchemaSource.
+
+    Tests empty `schemas` to simulate a system where the fork's schema was
+    never installed (or was wiped by a nautilus package upgrade).
+    """
+
+    schemas = {'org.gnome.NautilusPlus.preferences': ['hide-archived']}
+
+    def __init__(self, schemas):
+        self._schemas = schemas
+
+    @classmethod
+    def get_default(cls):
+        return cls(dict(cls.schemas))
+
+    def lookup(self, schema_id, recursive):
+        keys = self._schemas.get(schema_id)
+        return _SettingsSchema(keys) if keys is not None else None
+
+
 class _Gio:
     Settings = _Settings
+    SettingsSchemaSource = _SettingsSchemaSource
     FileQueryInfoFlags = types.SimpleNamespace(NONE=0)
 
     class Application:
@@ -297,10 +331,10 @@ class ArchiveTests(unittest.TestCase):
 
 
 class HideArchivedStateTests(unittest.TestCase):
-    """hide-archived lives in the shared nautilus gsettings (fork-only key)."""
+    """hide-archived lives in the fork's own gsettings schema."""
 
     def setUp(self):
-        self.prefs = project_name_zh._preferences
+        self.prefs = project_name_zh._plus_settings
 
     def test_defaults_to_show(self):
         self.assertFalse(project_name_zh._hide_archived())
@@ -324,6 +358,55 @@ class HideArchivedStateTests(unittest.TestCase):
         project_name_zh._set_hide_archived(True)
         content = Path(project_name_zh.STATE_FILE).read_text(encoding='utf-8')
         self.assertNotIn('hide-archived', content)
+
+
+class MissingPlusSchemaTests(unittest.TestCase):
+    """A nautilus package upgrade must degrade, never crash the fork."""
+
+    def setUp(self):
+        self._saved = _SettingsSchemaSource.schemas
+        _SettingsSchemaSource.schemas = {}
+
+    def tearDown(self):
+        _SettingsSchemaSource.schemas = self._saved
+
+    def test_settings_object_is_none(self):
+        self.assertIsNone(project_name_zh._open_plus_settings())
+
+    def test_reads_and_writes_degrade_without_raising(self):
+        original = project_name_zh._plus_settings
+        project_name_zh._plus_settings = project_name_zh._open_plus_settings()
+        self.addCleanup(setattr, project_name_zh, '_plus_settings', original)
+
+        self.assertFalse(project_name_zh._hide_archived())
+        project_name_zh._set_hide_archived(True)  # silent no-op
+        self.assertFalse(project_name_zh._hide_archived())
+
+    def test_toggle_is_not_offered(self):
+        original_running = project_name_zh._running_as_plus
+        original_settings = project_name_zh._plus_settings
+        project_name_zh._running_as_plus = lambda *args, **kwargs: True
+        project_name_zh._plus_settings = None
+        self.addCleanup(setattr, project_name_zh, '_running_as_plus',
+                        original_running)
+        self.addCleanup(setattr, project_name_zh, '_plus_settings',
+                        original_settings)
+
+        menu = project_name_zh.ProjectNameZhMenu()
+        items = menu.get_background_items(_FileInfo('file:///tmp/project'))
+        names = [item.kwargs['name'] for item in items]
+        self.assertNotIn('ProjectNameZh::ToggleHideArchived', names)
+
+    def test_toggle_is_offered_when_schema_is_available(self):
+        original_running = project_name_zh._running_as_plus
+        project_name_zh._running_as_plus = lambda *args, **kwargs: True
+        self.addCleanup(setattr, project_name_zh, '_running_as_plus',
+                        original_running)
+
+        menu = project_name_zh.ProjectNameZhMenu()
+        items = menu.get_background_items(_FileInfo('file:///tmp/project'))
+        names = [item.kwargs['name'] for item in items]
+        self.assertIn('ProjectNameZh::ToggleHideArchived', names)
 
 
 class RunningAsPlusTests(unittest.TestCase):

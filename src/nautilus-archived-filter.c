@@ -6,8 +6,15 @@
 
 #include "nautilus-archived-filter.h"
 
-#include "nautilus-global-preferences.h"
 #include "nautilus-grouped-view.h"
+
+/* Fork-only settings live in the fork's own schema file, never in
+ * org.gnome.nautilus.preferences: that schema is owned by the distribution's
+ * nautilus package, so a system upgrade replaces the file and drops our key.
+ * Reading a key that does not exist aborts the process, so the schema is
+ * looked up defensively instead. See plus/docs/pitfalls.md. */
+#define PLUS_SCHEMA_ID "org.gnome.NautilusPlus.preferences"
+#define HIDE_ARCHIVED_KEY "hide-archived"
 
 enum
 {
@@ -25,16 +32,56 @@ struct _NautilusArchivedFilter
     gboolean enabled;
     gboolean setting_enabled;
     gboolean temporarily_disabled;
+    GSettings *settings; /* NULL when the fork schema is unavailable */
     gulong settings_handler_id;
 };
 
 G_DEFINE_TYPE (NautilusArchivedFilter, nautilus_archived_filter, GTK_TYPE_FILTER)
 
+static GSettings *
+create_plus_settings (void)
+{
+    GSettingsSchemaSource *source;
+    GSettingsSchema *schema;
+    GSettings *settings = NULL;
+
+    source = g_settings_schema_source_get_default ();
+    if (source == NULL)
+    {
+        return NULL;
+    }
+
+    schema = g_settings_schema_source_lookup (source, PLUS_SCHEMA_ID, TRUE);
+    if (schema == NULL || !g_settings_schema_has_key (schema, HIDE_ARCHIVED_KEY))
+    {
+        /* Not a fatal condition: without the key the feature stays off, which
+         * is the same as "archived folders are shown". Aborting here would
+         * take the whole file manager down on a system that merely upgraded
+         * its nautilus package. */
+        g_warning_once ("Settings schema '%s' with key '%s' is missing; "
+                        "hide-archived stays disabled until nautilus-plus is "
+                        "installed again.",
+                        PLUS_SCHEMA_ID, HIDE_ARCHIVED_KEY);
+    }
+    else
+    {
+        settings = g_settings_new_full (schema, NULL, NULL);
+    }
+
+    if (schema != NULL)
+    {
+        g_settings_schema_unref (schema);
+    }
+
+    return settings;
+}
+
 static void
 hide_archived_changed (NautilusArchivedFilter *self)
 {
     self->setting_enabled =
-        g_settings_get_boolean (nautilus_preferences, "hide-archived");
+        self->settings != NULL &&
+        g_settings_get_boolean (self->settings, HIDE_ARCHIVED_KEY);
 
     /* A global setting change starts a new visibility state. Do not let a
      * previous card click keep this view in its temporary reveal state when
@@ -143,7 +190,8 @@ nautilus_archived_filter_finalize (GObject *object)
 {
     NautilusArchivedFilter *self = NAUTILUS_ARCHIVED_FILTER (object);
 
-    g_clear_signal_handler (&self->settings_handler_id, nautilus_preferences);
+    g_clear_signal_handler (&self->settings_handler_id, self->settings);
+    g_clear_object (&self->settings);
 
     G_OBJECT_CLASS (nautilus_archived_filter_parent_class)->finalize (object);
 }
@@ -174,10 +222,16 @@ nautilus_archived_filter_init (NautilusArchivedFilter *self)
 
     /* The enabled state lives in gsettings (fork-only key): the Python
      * extension writes it, every view instance follows. */
-    self->settings_handler_id =
-        g_signal_connect_object (nautilus_preferences, "changed::hide-archived",
-                                 G_CALLBACK (hide_archived_changed),
-                                 self, G_CONNECT_SWAPPED);
+    self->settings = create_plus_settings ();
+    if (self->settings != NULL)
+    {
+        self->settings_handler_id =
+            g_signal_connect_object (self->settings,
+                                     "changed::" HIDE_ARCHIVED_KEY,
+                                     G_CALLBACK (hide_archived_changed),
+                                     self, G_CONNECT_SWAPPED);
+    }
+
     hide_archived_changed (self);
 }
 

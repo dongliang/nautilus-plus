@@ -22,7 +22,7 @@ archived: true → group 属性  →   NautilusArchivedFilter(GtkFilter):
 1. **搜索结果也隐藏**:搜索走同一 view model 过滤链,自动生效
 2. **默认显示**:新安装不隐藏,避免用户以为文件丢了;与中文名开关默认开一致
 3. **仅 nautilus-plus 显示菜单**:系统 nautilus 无过滤能力,显示了也没效果
-4. **全局状态**:所有视图共用,存 gsettings `org.gnome.nautilus.preferences` 的 `hide-archived` 键(fork-only,布尔,默认 false=显示)
+4. **全局状态**:所有视图共用,存 **fork 自有 schema** `org.gnome.NautilusPlus.preferences` 的 `hide-archived` 键(布尔,默认 false=显示)
 
 ## C 层实现
 
@@ -66,11 +66,21 @@ files-view constructed:
 
 ### 状态持久化
 
-gsettings `org.gnome.nautilus.preferences` 新增 fork-only 布尔键 `hide-archived`(默认 false)。**这是 Python 开关与 C 过滤器之间的状态通道**:Python `_set_hide_archived()` 写键,C 侧 `NautilusArchivedFilter` init 时读初始值并监听 `changed::hide-archived`——多窗口即时同步、无需进程间通知。系统 nautilus 不读此键,无影响。
+fork 自有 schema `plus/gschema/org.gnome.NautilusPlus.gschema.xml`(id `org.gnome.NautilusPlus.preferences`,路径 `/org/gnome/NautilusPlus/preferences/`)定义布尔键 `hide-archived`(默认 false)。**这是 Python 开关与 C 过滤器之间的状态通道**:Python `_set_hide_archived()` 写键,C 侧 `NautilusArchivedFilter` init 时读初始值并监听 `changed::hide-archived`——多窗口即时同步、无需进程间通知。系统 nautilus 不读此键,无影响。
 
-> 踩坑记录:该键最初被误加到 `org.gnome.nautilus.list-view` schema(紧邻 `use-tree-view`),
+**为什么必须是独立文件/schema id**:`org.gnome.nautilus.preferences` 所在的 `data/org.gnome.nautilus.gschema.xml` 安装到 `/usr/share/glib-2.0/schemas/`,**该路径由发行版的 `nautilus` 包拥有**。fork 曾把键加在这个文件里,结果一次 `pacman` 全量更新就把文件换回上游版本、键随之消失,而 `g_settings_get_boolean()` 读到不存在的键会 `g_error()` **直接 abort**——表现为 nautilus-plus 一开窗口就闪退。独立文件名的 schema 不属于任何发行版包,升级不受影响。
+
+两侧读取都做了防御(schema 或键缺失时降级为"显示归档",绝不 abort):
+
+- C:`g_settings_schema_source_lookup()` + `g_settings_schema_has_key()` 判定后才 `g_settings_new_full()`,`settings == NULL` 时过滤器保持停用
+- Python:同样先 lookup + `has_key()`,再 `Settings.new_full()`。**不能用 `try/except Settings.new()`**:schema 缺失时它同样是 C 层 `g_error()` abort,Python 异常抓不住
+- 菜单项在不可用时直接不提供(不给点了没反应的控件)
+
+> 踩坑记录一:该键最初被误加到 `org.gnome.nautilus.list-view` schema(紧邻 `use-tree-view`),
 > 导致 C/Python 双双报"没有键"、过滤永不生效。schema 键必须落在消费方读取的那个 id 里;
 > 验证方式:`glib-compile-schemas` 干净目录编译后用 C `g_settings_schema_has_key` 断言。
+>
+> 踩坑记录二:即便放对了 id,只要文件在发行版包拥有的路径下,系统升级就会抹掉它(见上)。
 
 中文名开关仍走 state 文件(第一行 on/off,兼容旧格式);归档隐藏不走 state 文件。
 
