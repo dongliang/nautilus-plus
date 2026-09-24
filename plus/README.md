@@ -34,12 +34,12 @@ fork 以 **nautilus-plus** 身份并行安装,与系统 nautilus 不冲突(设�
 
 ```bash
 # 新电脑依赖一次装齐(构建 + fork 运行时 + Python 扩展运行时)
-sudo pacman -S --needed meson glib2-devel gobject-introspection blueprint-compiler \
+pkexec pacman -S --needed meson glib2-devel gobject-introspection blueprint-compiler \
   itstool libselinux nautilus-python python-yaml bubblewrap localsearch xdg-user-dirs-gtk
 
 meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false   # prefix 必须为 /usr(见 pitfalls.md 第 12 条)
 ninja -C build
-sudo ninja -C build install                                    # 覆盖安装;pacman 更新会还原共享文件,重装一次即可
+pkexec ninja -C build install                                  # 覆盖安装(fork 已不修改任何发行版包拥有的文件,升级不会破坏它)
 rm -f ~/.local/share/nautilus-python/extensions/nautilus-meta.py  # 删除旧用户副本,避免双菜单(pitfalls #5)
 nautilus-plus                                                  # 启动;zh_CN 下显示「文件管理器增强版」
 ```
@@ -54,7 +54,7 @@ nautilus-plus                                                  # 启动;zh_CN �
 任何 C/Python 改动完成后,**先本地安装到系统,再打开 demo 文件夹**人工验收:
 
 ```bash
-ninja -C build && sudo ninja -C build install   # 构建 + 装到系统(需 sudo;sudo 不可用时在用户终端执行)
+ninja -C build && pkexec ninja -C build install   # 构建 + 装到系统(pkexec 会弹图形密码框)
 nautilus-plus plus/dev-demo                      # 打开 demo 文件夹验收
 ```
 

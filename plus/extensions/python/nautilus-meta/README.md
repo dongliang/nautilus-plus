@@ -16,7 +16,7 @@ cp nautilus-meta.py ~/.local/share/nautilus-python/extensions/
 nautilus -q        # 重启 nautilus
 ```
 
-依赖:nautilus-python、python-yaml(Arch: `sudo pacman -S nautilus-python python-yaml`)。
+依赖:nautilus-python、python-yaml(Arch: `pkexec pacman -S nautilus-python python-yaml`)。
 
 ## 用法
 

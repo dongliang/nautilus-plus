@@ -61,7 +61,7 @@
   - `gdbus-codegen` → **`glib2-devel`**(glib2 的 optdepends)
   - `g-ir-scanner` → **`gobject-introspection`**(用户只装了 `gobject-introspection-runtime`)
   - 另需:`blueprint-compiler`(.blp 蓝图)、`itstool`、`libselinux`(构建头文件)、`meson`
-- **处理**:构建前一次性装齐:`sudo pacman -S --needed meson glib2-devel gobject-introspection blueprint-compiler itstool libselinux`
+- **处理**:构建前一次性装齐:`pkexec pacman -S --needed meson glib2-devel gobject-introspection blueprint-compiler itstool libselinux`
 
 ## 11. fork 用 main 分支构建失败
 

@@ -62,7 +62,7 @@ meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false
 # 构建+安装
 meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false
 ninja -C build
-sudo ninja -C build install   # 覆盖安装;pacman 更新系统 nautilus 时会还原共享文件,重装一次即可
+pkexec ninja -C build install   # 覆盖安装(fork 已不修改发行版包拥有的文件,升级不会破坏它)
 
 # 启动
 nautilus-plus

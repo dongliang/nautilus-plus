@@ -11,11 +11,21 @@ nautilus(GNOME Files)的定制 fork。上游 C 代码 + `plus/` 目录存放全�
 3. `plus/docs/pitfalls.md` — 踩坑记录(避免重复踩)
 4. `plus/docs/CHANGELOG.md` — 版本日志与当前进度
 5. `plus/README.md` — 目录结构与 C/Python 分层说明
+6. `plus/docs/design/` — 各功能设计文档(`desc` / `grouped-view` / `archive-toggle` / `hide-archived` / `hidden-group-card` / `plus-identity`)
 
 ## 当前状态
 
-- **v0.1.0 已上线**:文件夹描述显示(扩展 `nautilus-meta.py`,字段 `desc`)
-- **0.2.0 计划**:分组视图评估——**fork 唯一动机**;开工前先读 `research.md` 第 2 节蓝图
+fork 已独立成型:Plus 构建产出 `nautilus-plus`(独立应用 ID,与系统 nautilus 并行不冲突),见 `design/plus-identity.md`。
+
+已上线功能(实现细节见各自设计文档):
+
+- **文件夹描述**:`.folder.yaml` 的 `desc` 显示在图标视图副标题与列表视图描述行;右键「修改描述」编辑
+- **分组视图**:`archived: true` 的文件夹归入「已归档」组(图标徽章 / 列表组头),该组固定排在普通组之后,组内沿用原有排序
+- **归档切换**:右键文件夹「归档 / 取消归档」(支持多选)
+- **隐藏归档**:空白处右键开关,归档文件夹从图标/列表/搜索/树形模式中消失;C 过滤器实现,状态走 fork 自有 gsettings(见决策 6)
+- **隐藏汇总卡片**:隐藏归档时视图末尾显示「已归档」卡片(数量 + 部分名称,点击临时显示,导航后恢复)
+
+版本与逐条进度以 `plus/docs/CHANGELOG.md` 为准。
 
 ## 已定决策(除非用户明确改变,不要推翻)
 
@@ -24,12 +34,16 @@ nautilus(GNOME Files)的定制 fork。上游 C 代码 + `plus/` 目录存放全�
 3. 架构分层:**C 钩子(能力)+ Python 扩展(规则)**;钩子保持"数据源可换"(只认扩展属性,不认写属性者)
 4. 扩展已改名 `nautilus-meta.py`(2026-09-25 完成):目录、菜单 ID(`FolderMeta::*`)、配置目录 `~/.config/nautilus-meta/`、类名同步;同日「中文名」概念整体改称「描述」`desc`
 5. fork 的 C 改动只服务于分组视图;描述、归档标记全部纯插件可达(扩展 API 已验证)
+6. **fork 专属设置必须放 fork 自有的 schema 文件**(2026-09-25):`plus/gschema/org.gnome.NautilusPlus.gschema.xml`,id `org.gnome.NautilusPlus.preferences`。**不得**加进发行版包拥有的文件(如上游 `data/org.gnome.nautilus.gschema.xml`)——系统升级会覆盖该文件,键消失后 `g_settings_get_boolean()` 直接 `g_error()` abort,表现为整个文件管理器开窗即闪退。读取侧一律先 `lookup()` + `has_key()` 再取设置对象,缺失时降级而非崩溃(详见 pitfalls #15)
 
 ## 开发约定
 
-- **开工铁律:开发任何功能前,必须先读完「开工前必读」的全部文档**(requirements → research → pitfalls → CHANGELOG),确认已验证的机制与死路后再动手;不能跳过、不能凭印象开工
-- **Python 扩展**:改 `plus/extensions/python/nautilus-meta/`;按下方验收流程**本地安装到系统**生效(sudo 不可用时临时装 `~/.local/share/nautilus-python/extensions/`,但系统副本必须删除,两者同存会双菜单——pitfalls #5);改后 `nautilus-plus -q` 重启生效;错误在 nautilus stderr
-- **C 改动**:标准 meson 构建(上游约定);`upstream` 远端(GNOME/nautilus)供参考;fork 专属内容只放 `plus/`,不碰上游目录(`docs/`、`extensions/` 是上游的)
+- **开工铁律:开发任何功能前,必须先读完「开工前必读」的全部文档**(requirements → research → pitfalls → CHANGELOG → README → design/),确认已验证的机制与死路后再动手;不能跳过、不能凭印象开工
+- **Python 扩展**:改 `plus/extensions/python/nautilus-meta/`;按下方验收流程**本地安装到系统**生效;快速迭代也可临时装 `~/.local/share/nautilus-python/extensions/`,但**系统副本必须删除**,两者同存会双菜单(pitfalls #5);改后 `nautilus-plus -q` 重启生效;错误输出在 nautilus stderr
+- **C 改动**:标准 meson 构建(上游约定);fork 基底是上游 `gnome-50` 稳定分支,需要对照上游时自行添加 `upstream` 远端(GNOME/nautilus);fork 专属内容只放 `plus/`,不碰上游目录(`docs/`、`extensions/` 是上游的)
+- **提权**:一律用 `pkexec`(如 `pkexec ninja -C build install`,会弹图形密码框);**禁用 sudo/su/doas**;pkexec 失败就停下问用户
+- **提交前必跑**:`ninja -C build`、`meson test -C build`(21 个)、`python3 -m unittest discover -s plus/extensions/python/nautilus-meta -p 'test_*.py'`(41 个)、`git diff --check`
+- **改了 gsettings schema 或 `.blp` 必须重新构建安装**才生效;`.blp` 改动可能不触发重编译,需 `touch` 该文件(见 pitfalls #16)
 - 新功能先写设计文档(`plus/docs/design/`)再动代码
 - 环境:nautilus 50.x + nautilus-python 4.1,GI 版本号 `4.1`,依赖 PyYAML
 
@@ -38,12 +52,12 @@ nautilus(GNOME Files)的定制 fork。上游 C 代码 + `plus/` 目录存放全�
 任何 C/Python 改动完成后,必须**本地安装到系统**,再打开 `plus/dev-demo/` 人工验收:
 
 1. **构建**:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false`(prefix 必须为 /usr,见 pitfalls.md 第 12 条;已配置时 `ninja -C build` 增量即可)
-2. **本地安装**:`sudo ninja -C build install`(装 `/usr/bin/nautilus-plus` + 扩展 `/usr/share/nautilus-python/extensions/`;sudo 需要密码时请用户在自己终端执行)
+2. **本地安装**:`pkexec ninja -C build install`(装 `/usr/bin/nautilus-plus` + 扩展 `/usr/share/nautilus-python/extensions/`)
 3. **打开**:`nautilus-plus plus/dev-demo`(fork 是独立应用 ID,与系统 nautilus 并行不冲突,无需退出系统实例;重启 fork 用 `nautilus-plus -q`)
-4. **验收内容**:`plus/dev-demo/` 内容与 `/tmp/opencode/demo` 一致——`alpha-project`(desc + archived)、`beta-project`(仅 desc)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`(普通文件);分别用图标视图和列表视图检查分组/描述显示效果
+4. **验收内容**:`plus/dev-demo/` 含 `alpha-project`(desc + archived)、`beta-project`(仅 desc)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`(普通文件);分别用图标视图和列表视图检查描述显示与分组效果;再验空白处右键的「隐藏归档」及其汇总卡片
 5. 验收后如无遗留需求可退出窗口,不强制清理
 
 ## 安装到系统
 
-- fork 身份安装:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false && ninja -C build && sudo ninja -C build install`,启动 `nautilus-plus`(设计见 `plus/docs/design/plus-identity.md`);新电脑先装依赖(`plus/README.md` 有完整清单)
+- fork 身份安装:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false && ninja -C build && pkexec ninja -C build install`,启动 `nautilus-plus`(设计见 `plus/docs/design/plus-identity.md`);新电脑先装依赖(`plus/README.md` 有完整清单)
 - **Python 扩展随 install 自动装到 `/usr/share/nautilus-python/extensions/`**(Plus 构建,所有用户生效);开发迭代仍装 `~/.local/share/nautilus-python/extensions/`,两者同存会双菜单(pitfalls #5),系统装后删用户副本
