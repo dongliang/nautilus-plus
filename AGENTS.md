@@ -11,7 +11,7 @@ nautilus(GNOME Files)的定制 fork。上游 C 代码 + `plus/` 目录存放全�
 3. `plus/docs/pitfalls.md` — 踩坑记录(避免重复踩)
 4. `plus/docs/CHANGELOG.md` — 版本日志与当前进度
 5. `plus/README.md` — 目录结构与 C/Python 分层说明
-6. `plus/docs/design/` — 各功能设计文档(`desc` / `grouped-view` / `archive-toggle` / `hide-archived` / `hidden-group-card` / `plus-identity`)
+6. `plus/docs/design/` — 各功能设计文档(`desc` / `file-desc` / `grouped-view` / `archive-toggle` / `hide-archived` / `hidden-group-card` / `plus-identity`)
 
 ## 当前状态
 
@@ -20,6 +20,7 @@ fork 已独立成型:Plus 构建产出 `nautilus-plus`(独立应用 ID,与系统
 已上线功能(实现细节见各自设计文档):
 
 - **文件夹描述**:`.folder.yaml` 的 `desc` 显示在图标视图副标题与列表视图描述行;右键「修改描述」编辑
+- **文件注释**:`.folder.yaml` 的 `file-desc` 给文件夹内的文件加注释,显示位置同描述;右键文件「修改注释」编辑(见 `design/file-desc.md`)
 - **分组视图**:`archived: true` 的文件夹归入「已归档」组(图标徽章 / 列表组头),该组固定排在普通组之后,组内沿用原有排序
 - **归档切换**:右键文件夹「归档 / 取消归档」(支持多选)
 - **隐藏归档**:空白处右键开关,归档文件夹从图标/列表/搜索/树形模式中消失;C 过滤器实现,状态走 fork 自有 gsettings(见决策 6)
@@ -30,7 +31,7 @@ fork 已独立成型:Plus 构建产出 `nautilus-plus`(独立应用 ID,与系统
 ## 已定决策(除非用户明确改变,不要推翻)
 
 1. **显示名覆盖钩子已否决**(2026-08-17)——描述用 caption 第二行方案:真名在上、描述在下。不要重新提议"替换显示名"
-2. `.folder.yaml` 是文件夹元数据文件:文件夹内 dotfile(随文件夹移动、工具无关),顶层键 `desc`(字符串)、`archived: true`(布尔,备用)。**改名记录(2026-09-24)**:原名 `.project.yaml`,因用途是通用文件夹元数据而非项目专用、且 `.project.yaml` 与 MuleSoft PDK 的文件重名,改为 `.folder.yaml`;磁盘上的旧文件已一次性迁移,代码不留旧名回退
+2. `.folder.yaml` 是文件夹元数据文件:文件夹内 dotfile(随文件夹移动、工具无关),顶层键 `desc`(字符串)、`archived: true`(布尔,备用)、`file-desc`(映射:文件名 → 注释)。**改名记录(2026-09-24)**:原名 `.project.yaml`,因用途是通用文件夹元数据而非项目专用、且 `.project.yaml` 与 MuleSoft PDK 的文件重名,改为 `.folder.yaml`;磁盘上的旧文件已一次性迁移,代码不留旧名回退
 3. 架构分层:**C 钩子(能力)+ Python 扩展(规则)**;钩子保持"数据源可换"(只认扩展属性,不认写属性者)
 4. 扩展已改名 `nautilus-meta.py`(2026-09-25 完成):目录、菜单 ID(`FolderMeta::*`)、配置目录 `~/.config/nautilus-meta/`、类名同步;同日「中文名」概念整体改称「描述」`desc`
 5. fork 的 C 改动只服务于分组视图;描述、归档标记全部纯插件可达(扩展 API 已验证)

@@ -66,6 +66,8 @@ PLUS_SCHEMA = 'org.gnome.NautilusPlus.preferences'
 HIDE_ARCHIVED_KEY = 'hide-archived'
 CAPTIONS_KEY = 'captions'
 ATTR = 'desc'
+# Per-file annotations live in a nested mapping of the same .folder.yaml.
+FILES_KEY = 'file-desc'
 # Attribute name used before the rename to 'desc'; captions written by an
 # older build still carry it and are carried over on sight (see
 # _normalize_captions).
@@ -105,10 +107,10 @@ def _open_plus_settings():
 
 _plus_settings = _open_plus_settings()
 
-# folder_path -> (mtime, desc | None, archived: bool)
+# folder_path -> (mtime, desc | None, archived: bool, {name: annotation})
 _yaml_cache = {}
-# folders we ever showed a Chinese name for; the source of truth for
-# clearing stale captions (yaml deleted / key removed / switch off)
+# items (folder or file) we ever showed a description for; the source of
+# truth for clearing stale captions (yaml deleted / key removed / switch off)
 _shown = set()
 # folders we ever marked as grouped (archived); the source of truth for
 # clearing the group attribute when it no longer applies
@@ -148,7 +150,7 @@ def _write_state(text):
 
 
 def _enabled():
-    """Whether the Chinese names are shown. Defaults to on."""
+    """Whether descriptions are shown. Defaults to on."""
     first_line = _read_state().splitlines()[0].strip() \
         if _read_state().splitlines() else ''
     # Missing file / legacy formats without a leading on|off default to on.
@@ -209,19 +211,26 @@ def _atomic_write(path, text, mode=None):
 
 # --- .folder.yaml --------------------------------------------------------
 
-def _yaml_info(folder_path):
-    """(desc, archived) from the folder's .folder.yaml. Cached by mtime."""
+def _yaml_data(folder_path):
+    """(desc, archived, file_descs) parsed from the folder's .folder.yaml.
+
+    Cached by mtime: this runs for every file in the folder, so the file
+    is parsed once per change, not once per item.
+    """
     yaml_path = os.path.join(folder_path, YAML_NAME)
     try:
         mtime = os.path.getmtime(yaml_path)
     except OSError:
         _yaml_cache.pop(folder_path, None)
-        return (None, False)
+        return (None, False, {})
+
     hit = _yaml_cache.get(folder_path)
     if hit is not None and hit[0] == mtime:
-        return (hit[1], hit[2])
-    name = None
+        return (hit[1], hit[2], hit[3])
+
+    desc = None
     archived = False
+    file_descs = {}
     try:
         if os.path.getsize(yaml_path) <= YAML_MAX_SIZE:
             with open(yaml_path, encoding='utf-8') as f:
@@ -229,17 +238,34 @@ def _yaml_info(folder_path):
             if isinstance(data, dict):
                 value = data.get(ATTR)
                 if isinstance(value, str) and value.strip():
-                    name = value.strip()
+                    desc = value.strip()
                 # Strict: only the YAML boolean true marks a folder archived.
                 # (PyYAML is YAML 1.1, so yes/on also parse as True — the
                 # .folder.yaml convention is to write true/false only.)
                 archived = data.get('archived') is True
+                per_file = data.get(FILES_KEY)
+                if isinstance(per_file, dict):
+                    for entry, annotation in per_file.items():
+                        if (isinstance(entry, str) and isinstance(annotation, str)
+                                and annotation.strip()):
+                            file_descs[entry] = annotation.strip()
     except (yaml.YAMLError, UnicodeDecodeError, OSError, ValueError):
         pass
-    _yaml_cache[folder_path] = (mtime, name, archived)
+    _yaml_cache[folder_path] = (mtime, desc, archived, file_descs)
     if len(_yaml_cache) > 1024:
         _yaml_cache.pop(next(iter(_yaml_cache)))
-    return (name, archived)
+    return (desc, archived, file_descs)
+
+
+def _yaml_info(folder_path):
+    """(desc, archived) from the folder's .folder.yaml. Cached by mtime."""
+    desc, archived, _file_descs = _yaml_data(folder_path)
+    return (desc, archived)
+
+
+def _yaml_file_descs(folder_path):
+    """{file name: annotation} from the folder's .folder.yaml, cached."""
+    return _yaml_data(folder_path)[2]
 
 
 def _yaml_scalar(value):
@@ -260,13 +286,8 @@ def _yaml_scalar(value):
     return scalar
 
 
-def _replace_yaml_key(text, key, scalar):
-    """Text with the top-level `key` value replaced by `scalar`.
-
-    Missing keys are appended (before a trailing `...` in block style,
-    inside the braces in flow style). Comments, other fields, key order
-    and line endings are preserved.
-    """
+def _compose_mapping(text):
+    """The root mapping node of `text`, validated."""
     try:
         data = yaml.safe_load(text)
         node = yaml.compose(text)
@@ -274,13 +295,74 @@ def _replace_yaml_key(text, key, scalar):
         raise ValueError('现有 .folder.yaml 格式无效') from error
     if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
         raise ValueError('.folder.yaml 顶层必须是对象')
+    return node
 
-    value_nodes = []
-    for key_node, value_node in node.value:
+
+def _find_key_nodes(mapping_node, key):
+    """(key_node, value_node) pairs whose key is the string `key`."""
+    return [
+        (key_node, value_node)
+        for key_node, value_node in mapping_node.value
         if (isinstance(key_node, yaml.ScalarNode)
-                and key_node.tag == 'tag:yaml.org,2002:str'
-                and key_node.value == key):
-            value_nodes.append(value_node)
+            and key_node.tag == 'tag:yaml.org,2002:str'
+            and key_node.value == key)
+    ]
+
+
+def _child_mapping(node, key):
+    """The mapping stored at `key`, or None when absent.
+
+    Raises when the key exists but does not hold a mapping: silently
+    replacing the user's data would be worse than refusing to write.
+    """
+    matches = _find_key_nodes(node, key)
+    if len(matches) > 1:
+        raise ValueError(f'.folder.yaml 中存在重复的 {key}')
+    if not matches:
+        return None
+    value_node = matches[0][1]
+    if not isinstance(value_node, yaml.MappingNode):
+        raise ValueError(f'.folder.yaml 中的 {key} 必须是对象')
+    return value_node
+
+
+def _block_indent(text, mapping_node):
+    """Leading whitespace of a block mapping's first entry."""
+    first_key = mapping_node.value[0][0]
+    line_start = text.rfind('\n', 0, first_key.start_mark.index) + 1
+    return ' ' * (first_key.start_mark.index - line_start)
+
+
+def _insert_block_entry(text, node, entry, before_document_end):
+    """Insert `entry` (newline-terminated) at the end of block `node`."""
+    newline = '\r\n' if '\r\n' in text else '\n'
+    if before_document_end:
+        # A `...` marker ends the document; the entry belongs before it.
+        marker = re.search(
+            r'(?m)^[ \t]*\.\.\.[ \t]*(?:#.*)?(?:\r?\n|$)',
+            text[node.end_mark.index:],
+        )
+        insert_at = (node.end_mark.index + marker.start()
+                     if marker is not None else len(text))
+    else:
+        insert_at = node.end_mark.index
+    before = text[:insert_at]
+    if before and not before.endswith(('\n', '\r')):
+        before += newline
+    return before + entry + text[insert_at:]
+
+
+def _put_in_mapping(text, node, key, value_text, indent='',
+                    before_document_end=False, entry_body=None):
+    """Text with `key` set to `value_text` inside mapping `node`.
+
+    An existing entry keeps its surroundings (comments, order, line
+    endings) and only its value is swapped. A new one is appended as
+    `entry_body`, which defaults to "<key>: <value_text>" and may be
+    overridden when the entry needs a shape of its own (a nested mapping).
+    """
+    value_nodes = [value_node
+                   for _key_node, value_node in _find_key_nodes(node, key)]
     if len(value_nodes) > 1:
         raise ValueError(f'.folder.yaml 中存在重复的 {key}')
 
@@ -289,10 +371,13 @@ def _replace_yaml_key(text, key, scalar):
         value_node = value_nodes[0]
         start = value_node.start_mark.index
         end = value_node.end_mark.index
-        replacement = scalar
+        replacement = value_text
         if '\n' in text[start:end] or '\r' in text[start:end]:
             replacement += newline
         return text[:start] + replacement + text[end:]
+
+    if entry_body is None:
+        entry_body = f'{key}: {value_text}'
 
     if node.flow_style:
         close = text.rfind('}', node.start_mark.index, node.end_mark.index)
@@ -306,43 +391,19 @@ def _replace_yaml_key(text, key, scalar):
             separator = ', '
         else:
             separator = ''
-        entry = f'{separator}{key}: {scalar}'
-        return text[:close] + entry + text[close:]
+        return text[:close] + f'{separator}{entry_body}' + text[close:]
 
-    marker = re.search(
-        r'(?m)^[ \t]*\.\.\.[ \t]*(?:#.*)?(?:\r?\n|$)',
-        text[node.end_mark.index:],
-    )
-    insert_at = (node.end_mark.index + marker.start()
-                 if marker is not None else len(text))
-    before = text[:insert_at]
-    if before and not before.endswith(('\n', '\r')):
-        before += newline
-    entry = f'{key}: {scalar}{newline}'
-    return before + entry + text[insert_at:]
+    entry = f'{indent}{entry_body}{newline}'
+    return _insert_block_entry(text, node, entry, before_document_end)
 
 
-def _remove_yaml_key(text, key):
-    """Text minus the top-level `key` entry.
+def _remove_from_mapping(text, node, key):
+    """Text minus the `key` entry of mapping `node`.
 
     Returns '' when nothing remains (caller deletes the file); None when
     the key was absent.
     """
-    try:
-        data = yaml.safe_load(text)
-        node = yaml.compose(text)
-    except (yaml.YAMLError, UnicodeDecodeError, ValueError) as error:
-        raise ValueError('现有 .folder.yaml 格式无效') from error
-    if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
-        raise ValueError('.folder.yaml 顶层必须是对象')
-
-    matches = [
-        (key_node, value_node)
-        for key_node, value_node in node.value
-        if (isinstance(key_node, yaml.ScalarNode)
-            and key_node.tag == 'tag:yaml.org,2002:str'
-            and key_node.value == key)
-    ]
+    matches = _find_key_nodes(node, key)
     if not matches:
         return None
     if len(matches) > 1:
@@ -381,6 +442,140 @@ def _remove_yaml_key(text, key):
     except yaml.YAMLError as error:
         raise ValueError('无法安全移除条目') from error
     return '' if empty else result
+
+
+def _replace_yaml_key(text, key, scalar):
+    """Text with the top-level `key` value replaced by `scalar`.
+
+    Missing keys are appended (before a trailing `...` in block style,
+    inside the braces in flow style). Comments, other fields, key order
+    and line endings are preserved.
+    """
+    node = _compose_mapping(text)
+    return _put_in_mapping(text, node, key, scalar, before_document_end=True)
+
+
+def _remove_yaml_key(text, key):
+    """Text minus the top-level `key` entry.
+
+    Returns '' when nothing remains (caller deletes the file); None when
+    the key was absent.
+    """
+    node = _compose_mapping(text)
+    return _remove_from_mapping(text, node, key)
+
+
+def _yaml_pair(name, value):
+    """`<name>: <value>`, both sides quoted the way YAML requires.
+
+    Handles file names that need quoting (`a: b.txt`, leading dashes,
+    trailing spaces) without hand-rolled escaping: dump a one-entry
+    mapping and take the text between the braces.
+    """
+    if not value:
+        raise ValueError('注释不能为空')
+    if '\n' in value or '\r' in value:
+        raise ValueError('注释不能包含换行')
+    dumped = yaml.safe_dump({name: value}, default_flow_style=True,
+                            allow_unicode=True, sort_keys=False,
+                            width=10 ** 9).strip()
+    if not (dumped.startswith('{') and dumped.endswith('}')):
+        raise ValueError('注释无法写入 YAML')
+    pair = dumped[1:-1]
+    if yaml.safe_load('{' + pair + '}') != {name: value}:
+        raise ValueError('注释无法写入 YAML')
+    return pair
+
+
+def _set_file_desc(text, filename, value):
+    """Text with file-desc.<filename> set to `value`."""
+    pair = _yaml_pair(filename, value)
+    newline = '\r\n' if '\r\n' in text else '\n'
+
+    if not text:
+        return f'{FILES_KEY}:{newline}  {pair}{newline}'
+
+    node = _compose_mapping(text)
+    files_node = _child_mapping(node, FILES_KEY)
+    if files_node is not None:
+        indent = '' if files_node.flow_style else _block_indent(text, files_node)
+        return _put_in_mapping(text, files_node, filename, value, indent=indent)
+
+    # No file-desc yet: create it. A flow document has no line structure
+    # to grow a block mapping into, so it gets a flow one instead.
+    if node.flow_style:
+        entry = f'{FILES_KEY}: {{{pair}}}'
+    else:
+        entry = f'{FILES_KEY}:{newline}  {pair}'
+    return _put_in_mapping(text, node, FILES_KEY, value, entry_body=entry,
+                           before_document_end=True)
+
+
+def _remove_file_desc(text, filename):
+    """Text minus file-desc.<filename>; the key goes when it empties.
+
+    Returns '' when nothing remains (caller deletes the file); None when
+    there was nothing to remove.
+    """
+    if not text:
+        return None
+    node = _compose_mapping(text)
+    files_node = _child_mapping(node, FILES_KEY)
+    if files_node is None:
+        return None
+    result = _remove_from_mapping(text, files_node, filename)
+    if result is None:
+        return None
+    try:
+        data = yaml.safe_load(result)
+    except yaml.YAMLError as error:
+        raise ValueError('无法安全移除条目') from error
+    if isinstance(data, dict) and not data.get(FILES_KEY):
+        # Last annotation gone: the empty key goes with it.
+        result = _remove_yaml_key(result, FILES_KEY)
+    return result
+
+
+def _update_existing_yaml_file(folder_path, update):
+    """Apply update(text) -> new text to an existing .folder.yaml.
+
+    Like _update_yaml_file, but never creates the file: removal has
+    nothing to do when there is no file to remove from.
+    """
+    yaml_path = os.path.join(folder_path, YAML_NAME)
+    try:
+        file_stat = os.stat(yaml_path)
+    except FileNotFoundError:
+        return
+    if file_stat.st_size > YAML_MAX_SIZE:
+        raise ValueError('.folder.yaml 文件过大')
+    with open(yaml_path, encoding='utf-8', newline='') as f:
+        original = f.read()
+    result = update(original)
+    if result is None:
+        return
+    if result == '':
+        os.unlink(yaml_path)
+    else:
+        _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
+
+
+def _write_file_desc(folder_path, filename, value):
+    """Set the annotation of one file inside `folder_path`."""
+    value = value.strip()
+    if not value:
+        raise ValueError('注释不能为空')
+
+    def update(text):
+        return _set_file_desc(text, filename, value)
+
+    _update_yaml_file(folder_path, update)
+
+
+def _remove_file_desc_in_folder(folder_path, filename):
+    """Drop one file's annotation; empty keys and files follow the usual rules."""
+    _update_existing_yaml_file(
+        folder_path, lambda text: _remove_file_desc(text, filename))
 
 
 def _update_yaml_file(folder_path, update):
@@ -423,22 +618,8 @@ def _write_desc(folder_path, value):
 
 def _remove_key_in_folder(folder_path, key):
     """Drop a top-level key; delete .folder.yaml if nothing else remains."""
-    yaml_path = os.path.join(folder_path, YAML_NAME)
-    try:
-        file_stat = os.stat(yaml_path)
-    except FileNotFoundError:
-        return  # Nothing to remove.
-    if file_stat.st_size > YAML_MAX_SIZE:
-        raise ValueError('.folder.yaml 文件过大')
-    with open(yaml_path, encoding='utf-8', newline='') as f:
-        original = f.read()
-    result = _remove_yaml_key(original, key)
-    if result is None:
-        return
-    if result == '':
-        os.unlink(yaml_path)
-    else:
-        _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
+    _update_existing_yaml_file(
+        folder_path, lambda text: _remove_yaml_key(text, key))
 
 
 def _set_archived(folder_path, archived):
@@ -548,9 +729,8 @@ def _sync_captions(enabled):
 
 # --- applying the name ----------------------------------------------------
 
-def _local_folder_path(file):
-    if not file.is_directory():
-        return None
+def _local_path(file):
+    """Local filesystem path of `file`, or None when it has none."""
     uri = file.get_uri()
     if not uri.startswith('file:'):
         return None
@@ -560,31 +740,59 @@ def _local_folder_path(file):
         return None
 
 
+def _local_folder_path(file):
+    if not file.is_directory():
+        return None
+    return _local_path(file)
+
+
+def _local_file_target(file):
+    """(parent folder, file name) for a local plain file, else None."""
+    if file.is_directory():
+        return None
+    path = _local_path(file)
+    if path is None:
+        return None
+    return os.path.dirname(path), os.path.basename(path)
+
+
 def _apply(file):
-    """Set/clear the desc and group extension attributes for one file.
+    """Set/clear the desc and group extension attributes for one item.
 
-    The group attribute is independent of the on/off switch: the switch only
-    controls the Chinese captions. Archived folders are always grouped.
+    A folder's desc is its own .folder.yaml; a plain file's annotation is
+    looked up in its parent folder's. The group attribute is independent
+    of the on/off switch: the switch only controls the description
+    captions, while archived folders are always grouped.
     """
-    folder = _local_folder_path(file)
-    if folder is None:
+    path = _local_path(file)
+    if path is None:
         return
-    name, archived = _yaml_info(folder)
 
+    if not file.is_directory():
+        annotation = _yaml_file_descs(
+            os.path.dirname(path)).get(os.path.basename(path))
+        if _enabled() and annotation:
+            file.add_string_attribute(ATTR, annotation)
+            _shown.add(path)
+        elif path in _shown:
+            file.add_string_attribute(ATTR, '')
+        return
+
+    name, archived = _yaml_info(path)
     if _enabled() and name:
         file.add_string_attribute(ATTR, name)
-        _shown.add(folder)
-    elif folder in _shown:
+        _shown.add(path)
+    elif path in _shown:
         # Extension attributes have no removal: an empty value clears the
         # line. Needed when desc is removed or the switch is turned off.
         file.add_string_attribute(ATTR, '')
 
     if archived is True:
         file.add_string_attribute(GROUP_ATTR, ARCHIVED_LABEL)
-        _grouped.add(folder)
-    elif folder in _grouped:
+        _grouped.add(path)
+    elif path in _grouped:
         file.add_string_attribute(GROUP_ATTR, '')
-        _grouped.discard(folder)
+        _grouped.discard(path)
 
 
 def _refresh_folder(folder):
@@ -653,7 +861,7 @@ def _active_window():
 
 
 class FolderMetaInfoProvider(GObject.GObject, Nautilus.InfoProvider):
-    """Shows the Chinese name via a caption extension attribute."""
+    """Shows folder descriptions and file annotations as captions."""
 
     def __init__(self):
         super().__init__()
@@ -671,27 +879,36 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
         self._alerts = set()
 
     def get_file_items(self, files):
-        # Multi-selection keeps the batch archive toggle only — editing the
-        # description makes no sense when the user selected more than one item,
-        # even if some of them are not local folders.
+        # Editing a description or an annotation targets one item; a
+        # multi-selection keeps the batch archive toggle only.
+        items = []
+        if len(files) == 1:
+            file = files[0]
+            if _local_folder_path(file) is not None:
+                items.append(Nautilus.MenuItem(
+                    name='FolderMeta::EditDesc',
+                    label='修改描述',
+                    tip='编辑文件夹 .folder.yaml 中的 desc',
+                    icon=None,
+                ))
+                items[-1].connect('activate', self._on_edit_name, file)
+            else:
+                target = _local_file_target(file)
+                if target is None:
+                    return []
+                items.append(Nautilus.MenuItem(
+                    name='FolderMeta::EditFileDesc',
+                    label='修改注释',
+                    tip='编辑所属文件夹 .folder.yaml 中的 file-desc',
+                    icon=None,
+                ))
+                items[-1].connect('activate', self._on_edit_file_desc,
+                                  file, *target)
+
         folders = [(file, path) for file in files
                    if (path := _local_folder_path(file)) is not None]
-        if len(files) != 1 or not folders:
-            if not folders:
-                return []
-            single = False
-        else:
-            single = True
-        items = []
-        if single:
-            file, _folder = folders[0]
-            items.append(Nautilus.MenuItem(
-                name='FolderMeta::EditDesc',
-                label='修改描述',
-                tip='编辑文件夹 .folder.yaml 中的 desc',
-                icon=None,
-            ))
-            items[-1].connect('activate', self._on_edit_name, file)
+        if not folders:
+            return items
 
         # Dynamic action label: offer unarchive only when every selected
         # folder is archived; mixed selections offer archiving (already
@@ -728,14 +945,31 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
         folder = _local_folder_path(file)
         if folder is None:
             return
+        desc, _archived = _yaml_info(folder)
+        self._open_editor(
+            file, '修改描述', '描述', desc,
+            lambda window, entry: self._save_desc(window, entry, file, folder))
+
+    def _on_edit_file_desc(self, _item, file, folder, filename):
+        annotation = _yaml_file_descs(folder).get(filename)
+        self._open_editor(
+            file, '修改注释', '注释', annotation,
+            lambda window, entry: self._save_file_desc(
+                window, entry, file, folder, filename))
+
+    def _open_editor(self, file, title, field_label, initial, on_save):
+        """A one-line editor window, shared by both description kinds.
+
+        `on_save(window, entry)` is called on save; it owns closing the
+        window so a failed write can keep it open with the input intact.
+        """
         uri = file.get_uri()
         existing = self._dialogs.get(uri)
         if existing is not None:
             existing.present()
             return
 
-        name, _archived = _yaml_info(folder)
-        window = Gtk.Window(title='修改描述')
+        window = Gtk.Window(title=title)
         window.set_default_size(420, 120)
         window.set_modal(True)
         window.set_destroy_with_parent(True)
@@ -746,12 +980,12 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         for margin in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{margin}')(18)
-        label = Gtk.Label(label='描述')
+        label = Gtk.Label(label=field_label)
         label.set_xalign(0)
         entry = Gtk.Entry()
         entry.set_hexpand(True)
         entry.set_activates_default(True)
-        entry.set_text(name or '')
+        entry.set_text(initial or '')
         entry.set_position(-1)
 
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -767,7 +1001,7 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
         window.set_default_widget(save)
 
         cancel.connect('clicked', lambda _button: window.close())
-        save.connect('clicked', self._on_save_name, window, entry, file, folder)
+        save.connect('clicked', lambda _button: on_save(window, entry))
         window.connect('close-request', self._on_editor_close, uri)
         key_controller = Gtk.EventControllerKey()
         key_controller.connect('key-pressed', self._on_editor_key, window)
@@ -805,13 +1039,13 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
 
         alert.choose(parent, None, on_alert_done, None)
 
-    def _on_save_name(self, _button, window, entry, file, folder):
+    def _save_desc(self, window, entry, file, folder):
         value = entry.get_text().strip()
         try:
             if value:
                 _write_desc(folder, value)
             else:
-                # Empty input clears the Chinese name; the yaml file goes
+                # Empty input clears the description; the yaml file goes
                 # with it when no other data remains.
                 _remove_key_in_folder(folder, ATTR)
             _yaml_cache.pop(folder, None)
@@ -820,6 +1054,26 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
         except Exception as error:
             traceback.print_exc()
             self._show_error('无法修改描述',
+                             str(error) or '写入 .folder.yaml 失败。',
+                             parent=window)
+            return
+        window.close()
+
+    def _save_file_desc(self, window, entry, file, folder, filename):
+        value = entry.get_text().strip()
+        try:
+            if value:
+                _write_file_desc(folder, filename, value)
+            else:
+                # Empty input clears the annotation; an emptied file-desc
+                # mapping and an emptied yaml file both go with it.
+                _remove_file_desc_in_folder(folder, filename)
+            _yaml_cache.pop(folder, None)
+            _apply(file)
+            file.invalidate_extension_info()
+        except Exception as error:
+            traceback.print_exc()
+            self._show_error('无法修改注释',
                              str(error) or '写入 .folder.yaml 失败。',
                              parent=window)
             return

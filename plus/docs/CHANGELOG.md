@@ -19,6 +19,17 @@
 - **隐藏归档(2026-08-22)**:空白处右键「隐藏归档/显示归档」(仅 fork 显示);C 层新增 `NautilusArchivedFilter` 与 slot 过滤器组合接入视图模型,归档文件夹从图标/列表/搜索/树形模式完全消失(组头随条目消失);Python 开关 ↔ C 过滤器状态走 gsettings fork-only 键 `org.gnome.nautilus.preferences.hide-archived`(默认显示)。设计见 `design/hide-archived.md`
 - **隐藏归档汇总卡片(2026-08-26)**:开启隐藏归档且有归档条目时,视图末尾出现独立汇总卡片(网格占一格/列表占一行):分组名「已归档」+ 数量 + 至多 3 条名称(中文名优先);点击临时显示被隐藏条目(不动持久化设置),导航到其他目录自动恢复隐藏。实现为独立卡片对象 `NautilusHiddenGroupCard` 挂 auxiliary `NautilusViewItem` 走 `GtkFlattenListModel` 尾部拼接,不伪造文件、不可选中、不进文件排序/过滤管线;选中转发器排除尾部位置。设计见 `design/hidden-group-card.md`;**修复(2026-08-26)**:扩展属性异步就绪晚于 items 进模型,初始加载/重进路径时归档先放行且无人重评估——`files_view_file_changed`/`end_file_changes` 现在以 idle 合并触发 `gtk_filter_changed(DIFFERENT)` 全量重评(卡片与过滤同源刷新);且 `match` 对「目录 + 属性检索中」的条目保守隐藏(`nautilus_file_is_extension_info_pending`),归档文件夹不再闪现一帧,非归档在属性就绪后正常回归;**再修复(2026-08-26)**:保守隐藏令「纯文件夹目录」在属性就绪前显示为空,重评估放行后条目数变化在 `end_file_changes` 之外——refilter idle 同步刷新空状态页与工具栏,修复打开 `/home/dongliang/projects` 等全文件夹目录显示「Folder is Empty」;**排序/首屏优化(2026-08-26)**:ready 判定补上 `REQUEST_EXTENSION_INFO`,隐藏归档首次加载等待完整文件列表和扩展属性后再安装 monitor/渲染,避免未知分组先显示再重排;共享分组比较器将「已归档」固定置底,普通组以及组内原有名称/日期/大小排序保持不变;**修复(2026-08-26)**:全局切换「显示归档/隐藏归档」时清除卡片点击产生的临时显示状态并即时刷新当前文件夹,避免切回隐藏后仍保留归档条目
 
+## 0.3.4 — 2026-09-25
+
+**文件注释 `file-desc`**
+
+- `.folder.yaml` 新增顶层键 `file-desc`(文件名 → 注释),给文件夹内的文件加注释;右键单个文件「修改注释」编辑
+- 显示复用文件夹描述那条通道(`desc` 扩展属性),**C 层零改动**;受同一个「显示/隐藏描述」开关控制
+- 只对文件生效:子文件夹仍由它自己的 `.folder.yaml` 描述,避免同一显示位两个来源
+- YAML 局部更新助手由「仅顶层键」重构为「面向任意映射节点」,顶层行为不变(现有测试即回归);新增嵌套写入/移除,`file-desc` 空则连键删、文件空则连文件删
+- 已知限制:注释以文件名为键,重命名或移出后失效(不报错、不自动跟随)
+- Python 单测 41 → 62(`FileDescYamlTests`、`ApplyAnnotationTests`,后者首次覆盖 `_apply`);设计见 `design/file-desc.md`
+
 ## 0.3.3 — 2026-09-25
 
 **「中文名」概念整体改称「描述」(`desc`)**

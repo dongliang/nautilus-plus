@@ -45,12 +45,16 @@ class _FileInfo:
     def __init__(self, uri, directory=True):
         self.uri = uri
         self.directory = directory
+        self.attributes = {}
 
     def is_directory(self):
         return self.directory
 
     def get_uri(self):
         return self.uri
+
+    def add_string_attribute(self, name, value):
+        self.attributes[name] = value
 
 
 class _GObject:
@@ -483,7 +487,6 @@ class MenuFilterTests(unittest.TestCase):
         items = menu.get_file_items([folder, remote_folder])
         labels = [item.kwargs['label'] for item in items]
         self.assertEqual(labels, ['归档'])
-        self.assertEqual(menu.get_file_items([regular_file]), [])
         self.assertEqual(menu.get_file_items([remote_folder]), [])
 
     def test_multi_select_shows_only_archive_toggle(self):
@@ -502,10 +505,175 @@ class MenuFilterTests(unittest.TestCase):
             items = menu.get_file_items([folder])
             self.assertEqual(items[-1].kwargs['label'], '取消归档')
 
-    def test_non_folder_selection_gets_nothing(self):
+    def test_single_local_file_gets_annotation_menu(self):
         menu = nautilus_meta.FolderMetaMenu()
         regular_file = _FileInfo('file:///tmp/notes.txt', directory=False)
-        self.assertEqual(menu.get_file_items([regular_file]), [])
+        items = menu.get_file_items([regular_file])
+        self.assertEqual([item.kwargs['label'] for item in items], ['修改注释'])
+
+    def test_remote_file_gets_nothing(self):
+        menu = nautilus_meta.FolderMetaMenu()
+        remote_file = _FileInfo('sftp://host/notes.txt', directory=False)
+        self.assertEqual(menu.get_file_items([remote_file]), [])
+
+
+class FileDescYamlTests(unittest.TestCase):
+    """file-desc holds per-file annotations in the folder's .folder.yaml."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = Path(self.folder.name) / nautilus_meta.YAML_NAME
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def read(self):
+        return self.path.read_text(encoding='utf-8')
+
+    def test_creates_block_mapping(self):
+        nautilus_meta._write_file_desc(self.folder.name, 'notes.txt', '会议记录')
+        self.assertEqual(self.read(), 'file-desc:\n  notes.txt: 会议记录\n')
+
+    def test_appends_to_existing_block_mapping(self):
+        self.path.write_text('desc: 项目\nfile-desc:\n  a.txt: 甲\n',
+                             encoding='utf-8')
+        nautilus_meta._write_file_desc(self.folder.name, 'b.txt', '乙')
+        self.assertEqual(self.read(),
+                         'desc: 项目\nfile-desc:\n  a.txt: 甲\n  b.txt: 乙\n')
+
+    def test_replaces_one_entry_and_keeps_its_comment(self):
+        self.path.write_text('file-desc:\n  a.txt: 旧  # keep\n  b.txt: 乙\n',
+                             encoding='utf-8')
+        nautilus_meta._write_file_desc(self.folder.name, 'a.txt', '新')
+        self.assertEqual(self.read(),
+                         'file-desc:\n  a.txt: 新  # keep\n  b.txt: 乙\n')
+
+    def test_extends_flow_mapping(self):
+        self.path.write_text('file-desc: {a.txt: 甲}\n', encoding='utf-8')
+        nautilus_meta._write_file_desc(self.folder.name, 'b.txt', '乙')
+        self.assertEqual(self.read(), 'file-desc: {a.txt: 甲, b.txt: 乙}\n')
+
+    def test_quotes_awkward_file_names(self):
+        nautilus_meta._write_file_desc(self.folder.name, 'a: b.txt', '含冒号')
+        self.assertEqual(self.read(), "file-desc:\n  'a: b.txt': 含冒号\n")
+
+    def test_rejects_duplicate_entries_without_overwriting(self):
+        original = 'file-desc:\n  a.txt: 甲\n  a.txt: 乙\n'
+        self.path.write_text(original, encoding='utf-8')
+        with self.assertRaises(ValueError):
+            nautilus_meta._write_file_desc(self.folder.name, 'a.txt', '新')
+        self.assertEqual(self.read(), original)
+
+    def test_rejects_non_mapping_file_desc(self):
+        original = 'file-desc:\n  - a.txt\n'
+        self.path.write_text(original, encoding='utf-8')
+        with self.assertRaises(ValueError):
+            nautilus_meta._write_file_desc(self.folder.name, 'a.txt', '甲')
+        self.assertEqual(self.read(), original)
+
+    def test_rejects_blank_annotation(self):
+        self.path.write_text('file-desc:\n  a.txt: 甲\n', encoding='utf-8')
+        with self.assertRaises(ValueError):
+            nautilus_meta._write_file_desc(self.folder.name, 'a.txt', '   ')
+
+    def test_removing_an_entry_keeps_the_others(self):
+        self.path.write_text(
+            'desc: 项目\nfile-desc:\n  a.txt: 甲\n  b.txt: 乙\n',
+            encoding='utf-8')
+        nautilus_meta._remove_file_desc_in_folder(self.folder.name, 'a.txt')
+        self.assertEqual(self.read(), 'desc: 项目\nfile-desc:\n  b.txt: 乙\n')
+
+    def test_removing_the_last_entry_drops_the_key(self):
+        self.path.write_text('desc: 项目\nfile-desc:\n  a.txt: 甲\n',
+                             encoding='utf-8')
+        nautilus_meta._remove_file_desc_in_folder(self.folder.name, 'a.txt')
+        self.assertEqual(self.read(), 'desc: 项目\n')
+
+    def test_removing_the_last_entry_drops_an_empty_file(self):
+        self.path.write_text('file-desc:\n  a.txt: 甲\n', encoding='utf-8')
+        nautilus_meta._remove_file_desc_in_folder(self.folder.name, 'a.txt')
+        self.assertFalse(self.path.exists())
+
+    def test_removing_an_unknown_entry_keeps_the_file(self):
+        original = 'file-desc:\n  a.txt: 甲\n'
+        self.path.write_text(original, encoding='utf-8')
+        nautilus_meta._remove_file_desc_in_folder(self.folder.name, 'zzz.txt')
+        self.assertEqual(self.read(), original)
+
+    def test_removal_without_a_yaml_file_does_nothing(self):
+        nautilus_meta._remove_file_desc_in_folder(self.folder.name, 'a.txt')
+        self.assertFalse(self.path.exists())
+
+    def test_lookup_skips_blank_annotations(self):
+        self.path.write_text(
+            'file-desc:\n  a.txt: 甲\n  空.txt: "  "\n  b.txt: 乙\n',
+            encoding='utf-8')
+        self.assertEqual(nautilus_meta._yaml_file_descs(self.folder.name),
+                         {'a.txt': '甲', 'b.txt': '乙'})
+
+
+class ApplyAnnotationTests(unittest.TestCase):
+    """A file's annotation is read from its parent folder's .folder.yaml."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = Path(self.folder.name) / nautilus_meta.YAML_NAME
+        self.addCleanup(self.folder.cleanup)
+        for cache in (nautilus_meta._shown, nautilus_meta._grouped,
+                      nautilus_meta._yaml_cache):
+            cache.clear()
+        self.addCleanup(nautilus_meta._shown.clear)
+        self.addCleanup(nautilus_meta._grouped.clear)
+        self.addCleanup(nautilus_meta._yaml_cache.clear)
+
+    def item(self, name='notes.txt'):
+        uri = 'file://' + os.path.join(self.folder.name, name)
+        return _FileInfo(uri, directory=False)
+
+    def write(self, text):
+        self.path.write_text(text, encoding='utf-8')
+        nautilus_meta._yaml_cache.clear()
+
+    def test_annotation_becomes_the_description_attribute(self):
+        self.write('file-desc:\n  notes.txt: 会议记录\n')
+        item = self.item()
+        nautilus_meta._apply(item)
+        self.assertEqual(item.attributes.get('desc'), '会议记录')
+
+    def test_file_without_annotation_gets_none(self):
+        self.write('desc: 项目\n')
+        item = self.item()
+        nautilus_meta._apply(item)
+        self.assertNotIn('desc', item.attributes)
+
+    def test_blank_annotation_is_not_shown(self):
+        self.write('file-desc:\n  notes.txt: "  "\n')
+        item = self.item()
+        nautilus_meta._apply(item)
+        self.assertNotIn('desc', item.attributes)
+
+    def test_switch_off_hides_annotations(self):
+        self.write('file-desc:\n  notes.txt: 会议记录\n')
+        nautilus_meta._set_enabled(False)
+        self.addCleanup(nautilus_meta._set_enabled, True)
+        item = self.item()
+        nautilus_meta._apply(item)
+        self.assertNotIn('desc', item.attributes)
+
+    def test_removed_annotation_clears_a_shown_one(self):
+        self.write('file-desc:\n  notes.txt: 会议记录\n')
+        item = self.item()
+        nautilus_meta._apply(item)
+        self.assertEqual(item.attributes.get('desc'), '会议记录')
+        self.write('desc: 项目\n')
+        nautilus_meta._apply(item)
+        self.assertEqual(item.attributes.get('desc'), '')
+
+    def test_other_files_in_the_folder_are_unaffected(self):
+        self.write('file-desc:\n  notes.txt: 会议记录\n')
+        other = self.item('other.txt')
+        nautilus_meta._apply(other)
+        self.assertNotIn('desc', other.attributes)
 
 
 if __name__ == '__main__':
