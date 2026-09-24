@@ -20,7 +20,7 @@ archived: true → group 属性  →   NautilusArchivedFilter(GtkFilter):
 ## 需求决策(用户已确认)
 
 1. **搜索结果也隐藏**:搜索走同一 view model 过滤链,自动生效
-2. **默认显示**:新安装不隐藏,避免用户以为文件丢了;与中文名开关默认开一致
+2. **默认显示**:新安装不隐藏,避免用户以为文件丢了;与描述开关默认开一致
 3. **仅 nautilus-plus 显示菜单**:系统 nautilus 无过滤能力,显示了也没效果
 4. **全局状态**:所有视图共用,存 **fork 自有 schema** `org.gnome.NautilusPlus.preferences` 的 `hide-archived` 键(布尔,默认 false=显示)
 
@@ -57,9 +57,9 @@ files-view constructed:
 
 ## Python 层实现
 
-### 开关菜单(ProjectNameZhMenu.get_background_items)
+### 开关菜单(FolderMetaMenu.get_background_items)
 
-在现有「隐藏/显示中文项目名」旁新增一项:
+在现有「隐藏/显示描述」旁新增一项:
 
 - 标签:`隐藏归档`(当前显示时)/ `显示归档`(当前隐藏时)——动作式动态标签
 - 点击翻转状态 → 写 gsettings → C 过滤器收到 changed 信号自动重过滤(无需手动刷新视图)→ 重加当前文件夹属性触发菜单重建(pitfalls #2 同款机制)
@@ -82,7 +82,7 @@ fork 自有 schema `plus/gschema/org.gnome.NautilusPlus.gschema.xml`(id `org.gno
 >
 > 踩坑记录二:即便放对了 id,只要文件在发行版包拥有的路径下,系统升级就会抹掉它(见上)。
 
-中文名开关仍走 state 文件(第一行 on/off,兼容旧格式);归档隐藏不走 state 文件。
+描述开关仍走 state 文件(第一行 on/off,兼容旧格式);归档隐藏不走 state 文件。
 
 ### 菜单仅在 fork 显示
 

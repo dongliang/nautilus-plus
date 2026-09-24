@@ -9,7 +9,7 @@
 ## 需求决策(用户已确认)
 
 1. **显示条件**:仅当「隐藏归档」开启且当前目录存在归档条目时;其余情况卡片不出现
-2. **内容**:分组名(「已归档」)+ 数量 + 部分被隐藏条目的名称(中文名 `name-zh` 优先,没有则用英文显示名);卡片有余位时最多列 3 个,超出显示「等 N 个」
+2. **内容**:分组名(「已归档」)+ 数量 + 部分被隐藏条目的名称(描述 `desc` 优先,没有则用英文显示名);卡片有余位时最多列 3 个,超出显示「等 N 个」
 3. **尺寸**:网格模式占一个完整单元格;列表模式占一个条目行
 4. **位置**:始终在末尾(排序/过滤链之后)
 5. **点击行为**:临时显示全部被隐藏条目(不清除持久化设置);**导航到其他目录时自动恢复隐藏**
@@ -47,7 +47,7 @@ files_view_end_file_changes()
        否则 → 遍历 dup_unfiltered_root_items()
               (root_filter_model 之下的原始 store,未被归档过滤器碰过)
               统计 group == 已归档 的条目
-              name-zh quark 优先取显示名,「、」拼接,最多 3 个
+              desc quark 优先取显示名,「、」拼接,最多 3 个
               set_summary(count, details) → 追加 auxiliary item 到尾部 store
 ```
 
@@ -82,4 +82,4 @@ files_view_end_file_changes()
 
 1. **首次加载 ready barrier**:`load_directory()` 在隐藏归档开启时把 `NAUTILUS_FILE_ATTRIBUTE_EXTENSION_INFO` 加入目录 ready 请求并设置 `wait_for_all_files=TRUE`;`request_is_satisfied()` 增加 `REQUEST_EXTENSION_INFO` 分支,用现有 provider pending 状态判断。首次安装 monitor/把条目交给视图前,扩展属性和文件列表已经完成,因此首次排序/过滤就是最终状态;隐藏关闭时不增加等待,保留原有速度。
 2. **就绪前保守隐藏**(动态增量避免"显示一瞬再隐藏"):`NautilusArchivedFilter::match` 对「目录且扩展属性仍在检索中(`nautilus_file_is_extension_info_pending`)」的条目直接返回 FALSE——新增归档文件夹不会闪现,非归档文件夹在属性就绪后的重评估中正常回归;文件永不归档,直接放行不受影响。扩展未安装时 provider 列表为空、`pending` 恒为 FALSE,按原逻辑放行(安全退化)。
-3. **就绪后重评估并同步 UI**:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估、刷新卡片、空状态页和工具栏(dispose 时 `g_clear_handle_id` 清理)。此兜底覆盖动态新增、外部修改 `.project.yaml` 和 provider 重新失效。
+3. **就绪后重评估并同步 UI**:`files_view_file_changed` 与 `files_view_end_file_changes` 都调用 `schedule_archived_refilter()`,以 idle 合并批量文件变化,在空闲时对 archived filter 发一次 `GTK_FILTER_CHANGE_DIFFERENT` 全量重评估、刷新卡片、空状态页和工具栏(dispose 时 `g_clear_handle_id` 清理)。此兜底覆盖动态新增、外部修改 `.folder.yaml` 和 provider 重新失效。

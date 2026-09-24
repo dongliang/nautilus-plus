@@ -14,7 +14,7 @@
 
 ## 已验证可复用的机制
 
-1. **第二行 caption**:`add_string_attribute('name-zh', …)` + captions gsettings 配置任意属性名;captions 变化实时生效(视图监听 `changed::captions`)
+1. **第二行 caption**:`add_string_attribute('desc', …)` + captions gsettings 配置任意属性名;captions 变化实时生效(视图监听 `changed::captions`)
 2. **扩展信息失效即清空**:`invalidate_extension_info()` → `nautilus_file_invalidate_extension_info_internal`(`nautilus-file.c:7716`)先清空扩展 emblems/属性,再重跑所有 InfoProvider → 开关关闭时旧标记自动消失
 3. **菜单重建触发**:nautilus 的扩展菜单模型只在视图加载时构建一次;对当前文件夹重加扩展属性 → `nautilus_file_changed` → `view_directory_changed_callback`(`nautilus-files-view.c:8578-8584`)→ 调度菜单重建(约 0.5s)。`popup-menu-changed` 信号是死代码,从未被发出
 4. **属性无 remove 的清理**:`add_string_attribute(attr, '')` 置空串清掉显示(扩展属性 API 只有 add)
@@ -32,11 +32,11 @@
 ## fork 钩子落点蓝图(构建 nautilus-meta 的核心)
 
 > **现状(2026-08-17)**:fork 的唯一动机是**分组视图**(见第 2 节)。
-> 显示名覆盖已否决(第 1 节);中文名、归档标记全部纯插件可达。
+> 显示名覆盖已否决(第 1 节);描述、归档标记全部纯插件可达。
 
 ### 1. 显示名覆盖 ~~(约 10 行,零新 ABI)~~ — **已否决 2026-08-17**
 
-> **决策**:不实现显示名覆盖。用户确认"底部 caption 显示中文名"方案更优。
+> **决策**:不实现显示名覆盖。用户确认"底部 caption 显示描述"方案更优。
 > 否决理由:
 > 1. 开发者心智一致性——终端/编辑器用真实英文名,nautilus 同时显示英文名 + 中文标注,两边对得上
 > 2. 零 fork 成本——该功能纯插件可达,不值得为它维护 fork
@@ -66,8 +66,8 @@
 ## 架构决策
 
 - **分层**:C 钩子(能力)+ Python 扩展(规则)。判断标准:变化频率——规则/UX 常变留 Python(秒级迭代),能力少变留 C
-- **钩子抽象**:钩子只认"扩展属性 = 值",不认写属性者——为将来 C 原生读 `.project.yaml` 留迁移路径(规则稳定后,把读 yaml 搬进 C,Python 层收缩或消失)
-- **`.project.yaml` 定位**:文件夹内 dotfile——随文件夹移动而存活(mv/cp/rsync 携带)、工具无关(Windows 的 `desktop.ini` 同架构,已存活 30 年)
+- **钩子抽象**:钩子只认"扩展属性 = 值",不认写属性者——为将来 C 原生读 `.folder.yaml` 留迁移路径(规则稳定后,把读 yaml 搬进 C,Python 层收缩或消失)
+- **`.folder.yaml` 定位**:文件夹内 dotfile——随文件夹移动而存活(mv/cp/rsync 携带)、工具无关(Windows 的 `desktop.ini` 同架构,已存活 30 年)
 - **打包**:PKGBUILD 把扩展装到 `/usr/share/nautilus-python/extensions/`,`depends=(nautilus-python python-yaml)`,与 fork 版本锁步;装包前删用户目录旧副本防双菜单;开发用 `~/.local` 副本快速迭代
 - **fork 基底(2026-08-18 定)**:`gnome-50` 稳定分支——`main` 开发线要求未发布的 glib ≥ 2.89,稳定系统无法构建;稳定分支依赖实测匹配(glib 2.88.3 / gtk4 4.22.4 / libadwaita 1.9.3)
 
@@ -83,5 +83,5 @@ Linux 上"文件夹内配置文件驱动显示与组织"是空白市场;`nautilu
 ## 命名决策记录
 
 - fork 品牌候选(未定):**Verne**(谱系:Nautilus 潜艇 → Nemo 船长 → Verne 作者,推荐)、Argo(撞 Argo CD)、Dory、Nauti、Ammon、Ceph(撞 Ceph 存储)
-- 功能/机制名:**nautilus-meta**(元数据驱动,可扩展);当前扩展暂保持原名 `project-name-zh.py`,改名列入重构计划
+- 功能/机制名:**nautilus-meta**(元数据驱动,可扩展);当前扩展暂保持原名 `nautilus-meta.py`,改名列入重构计划
 - 二进制/包名保持 `nautilus`(低摩擦,IgnorePkg),品牌名独立

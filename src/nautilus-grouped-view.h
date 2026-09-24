@@ -13,7 +13,7 @@
 G_BEGIN_DECLS
 
 /* The group key extensions write for archived projects. Must stay in sync
- * with ARCHIVED_LABEL in project-name-zh.py (the writer side). */
+ * with ARCHIVED_LABEL in nautilus-meta.py (the writer side). */
 #define ARCHIVED_GROUP_KEY "已归档"
 
 /* Group key of a file: the "group" extension attribute, or NULL if the file

@@ -12,19 +12,19 @@ plus/
 ├── docs/            # 项目文档体系(可扩展)
 │   ├── requirements.md   # 原始需求(短、笼统)
 │   ├── design/           # 功能设计(按功能一个文件)
-│   │   └── name-zh.md
+│   │   └── desc.md
 │   ├── research.md       # 技术调研(已验证的机制/死路/fork 钩子蓝图)
 │   ├── pitfalls.md       # 踩坑记录
 │   └── CHANGELOG.md      # 版本日志
 └── extensions/
     └── python/           # Python 扩展(业务层,nautilus-python 插件)
-        └── project-name-zh/
+        └── nautilus-meta/
 ```
 
 ## 开发分工
 
 - **C 层**(本仓库主树):新能力钩子(显示名覆盖、分组机制等)——能力放 C,规则放 Python
-- **Python 层**(`extensions/python/`):业务逻辑(.project.yaml 解析、开关、菜单)——修改快速迭代,装到 `~/.local/share/nautilus-python/extensions/` 即可
+- **Python 层**(`extensions/python/`):业务逻辑(.folder.yaml 解析、开关、菜单)——修改快速迭代,装到 `~/.local/share/nautilus-python/extensions/` 即可
 
 详见 `docs/research.md` 的架构决策章节。
 
@@ -40,7 +40,7 @@ sudo pacman -S --needed meson glib2-devel gobject-introspection blueprint-compil
 meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false   # prefix 必须为 /usr(见 pitfalls.md 第 12 条)
 ninja -C build
 sudo ninja -C build install                                    # 覆盖安装;pacman 更新会还原共享文件,重装一次即可
-rm -f ~/.local/share/nautilus-python/extensions/project-name-zh.py  # 删除旧用户副本,避免双菜单(pitfalls #5)
+rm -f ~/.local/share/nautilus-python/extensions/nautilus-meta.py  # 删除旧用户副本,避免双菜单(pitfalls #5)
 nautilus-plus                                                  # 启动;zh_CN 下显示「文件管理器增强版」
 ```
 
@@ -59,4 +59,4 @@ nautilus-plus plus/dev-demo                      # 打开 demo 文件夹验收
 ```
 
 - fork 独立应用 ID,与系统 nautilus 并行不冲突,无需退出系统实例;改扩展后 `nautilus-plus -q` 重启生效
-- 验收内容:`plus/dev-demo/` 应包含 `alpha-project`(name-zh + archived)、`beta-project`(仅 name-zh)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`;分别用图标视图和列表视图检查分组/中文名显示效果
+- 验收内容:`plus/dev-demo/` 应包含 `alpha-project`(desc + archived)、`beta-project`(仅 desc)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`;分别用图标视图和列表视图检查分组/描述显示效果

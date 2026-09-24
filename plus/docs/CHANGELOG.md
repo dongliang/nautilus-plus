@@ -19,6 +19,28 @@
 - **隐藏归档(2026-08-22)**:空白处右键「隐藏归档/显示归档」(仅 fork 显示);C 层新增 `NautilusArchivedFilter` 与 slot 过滤器组合接入视图模型,归档文件夹从图标/列表/搜索/树形模式完全消失(组头随条目消失);Python 开关 ↔ C 过滤器状态走 gsettings fork-only 键 `org.gnome.nautilus.preferences.hide-archived`(默认显示)。设计见 `design/hide-archived.md`
 - **隐藏归档汇总卡片(2026-08-26)**:开启隐藏归档且有归档条目时,视图末尾出现独立汇总卡片(网格占一格/列表占一行):分组名「已归档」+ 数量 + 至多 3 条名称(中文名优先);点击临时显示被隐藏条目(不动持久化设置),导航到其他目录自动恢复隐藏。实现为独立卡片对象 `NautilusHiddenGroupCard` 挂 auxiliary `NautilusViewItem` 走 `GtkFlattenListModel` 尾部拼接,不伪造文件、不可选中、不进文件排序/过滤管线;选中转发器排除尾部位置。设计见 `design/hidden-group-card.md`;**修复(2026-08-26)**:扩展属性异步就绪晚于 items 进模型,初始加载/重进路径时归档先放行且无人重评估——`files_view_file_changed`/`end_file_changes` 现在以 idle 合并触发 `gtk_filter_changed(DIFFERENT)` 全量重评(卡片与过滤同源刷新);且 `match` 对「目录 + 属性检索中」的条目保守隐藏(`nautilus_file_is_extension_info_pending`),归档文件夹不再闪现一帧,非归档在属性就绪后正常回归;**再修复(2026-08-26)**:保守隐藏令「纯文件夹目录」在属性就绪前显示为空,重评估放行后条目数变化在 `end_file_changes` 之外——refilter idle 同步刷新空状态页与工具栏,修复打开 `/home/dongliang/projects` 等全文件夹目录显示「Folder is Empty」;**排序/首屏优化(2026-08-26)**:ready 判定补上 `REQUEST_EXTENSION_INFO`,隐藏归档首次加载等待完整文件列表和扩展属性后再安装 monitor/渲染,避免未知分组先显示再重排;共享分组比较器将「已归档」固定置底,普通组以及组内原有名称/日期/大小排序保持不变;**修复(2026-08-26)**:全局切换「显示归档/隐藏归档」时清除卡片点击产生的临时显示状态并即时刷新当前文件夹,避免切回隐藏后仍保留归档条目
 
+## 0.3.3 — 2026-09-25
+
+**「中文名」概念整体改称「描述」(`desc`)**
+
+- **理由**:用途不限于中文(可以是任意语言的文件夹说明),且元数据文件已改名 `.folder.yaml`,「中文名」已不贴合
+- 字段与属性:YAML 顶层键 `name-zh` → `desc`;扩展属性 `name-zh` → `desc`(图标视图副标题、列表视图描述行、隐藏归档卡片明细三处共用)
+- 插件改名:`project-name-zh.py` → `nautilus-meta.py`(目录同名);配置目录 `~/.config/nautilus-project-zh/` → `~/.config/nautilus-meta/`;菜单 ID `ProjectNameZh::*` → `FolderMeta::*`;类名 `ProjectNameZh*` → `FolderMeta*`
+- 界面文案:菜单与对话框「修改中文名」→「修改描述」,背景开关「隐藏/显示中文项目名」→「隐藏/显示描述」,相关报错同步
+- **captions 迁移**:图标视图 captions 及备份里的 `name-zh` 会被就地归一化为 `desc` 并去重——不做这步会残留一条解析不出值的空 caption,还会把用户的原始备份覆盖掉
+- **磁盘迁移**:13 个 `.folder.yaml` 的 `name-zh:` 键改写为 `desc:`(保留注释与其他键);配置目录整体迁移;旧装的 `project-name-zh.py` 必须删除(否则双菜单,pitfalls #5)
+- 不留旧名回退;Python 单测 36 → 41(新增 captions 迁移用例)
+- 另记:构建期改 `.blp` 可能不触发重编译,见 pitfalls #16
+
+## 0.3.2 — 2026-09-24
+
+**元数据文件改名 `.project.yaml` → `.folder.yaml`**
+
+- **理由**:用途是通用文件夹元数据(`notes/` 里存的是文件夹别名,不是项目);且 `.project.yaml` 与 MuleSoft PDK 的文件同名,`.folder.yaml` 经检索基本无人占用(仅一个个人站点仓库,且是 `.yml` 变体另有其人)
+- 代码:`YAML_NAME` 常量 + 文案/文档共 26 处替换;磁盘 14 个文件一次性迁移(11 个用户目录 + 3 个 dev-demo 夹具)
+- **不留旧名回退**:迁移已完成,代码只认 `.folder.yaml`
+- 本条目之前的历史记录中出现的 `.project.yaml` 即今 `.folder.yaml`
+
 ## 0.3.1 — 2026-09-14
 
 **修复 pacman 全量更新后闪退 ✅**

@@ -17,17 +17,17 @@
 
 #define SPINNER_DELAY_MS 200
 
-static GQuark name_zh_quark;
+static GQuark desc_quark;
 
 static GQuark
-get_name_zh_quark (void)
+get_desc_quark (void)
 {
-    if (G_UNLIKELY (name_zh_quark == 0))
+    if (G_UNLIKELY (desc_quark == 0))
     {
-        name_zh_quark = g_quark_from_static_string ("name-zh");
+        desc_quark = g_quark_from_static_string ("desc");
     }
 
-    return name_zh_quark;
+    return desc_quark;
 }
 
 struct _NautilusNameCell
@@ -49,7 +49,7 @@ struct _NautilusNameCell
     GtkWidget *snippet_button;
     GtkLabel *snippet;
     GtkWidget *path;
-    GtkWidget *name_zh;
+    GtkWidget *desc;
 
     gboolean show_snippet;
     gboolean in_file_change;
@@ -122,7 +122,7 @@ update_labels (NautilusNameCell *self)
     g_autoptr (NautilusViewItem) item = NULL;
     NautilusFile *file;
     g_autofree gchar *path_text = NULL;
-    g_autofree gchar *name_zh = NULL;
+    g_autofree gchar *desc = NULL;
     const gchar *fts_snippet = NULL;
 
     item = nautilus_view_cell_get_item (NAUTILUS_VIEW_CELL (self));
@@ -132,15 +132,15 @@ update_labels (NautilusNameCell *self)
     path_text = get_path_text (file,
                                self->path_attribute_q,
                                self->file_path_base_location);
-    name_zh = nautilus_file_get_string_attribute_q (file, get_name_zh_quark ());
+    desc = nautilus_file_get_string_attribute_q (file, get_desc_quark ());
     if (self->show_snippet)
     {
         fts_snippet = nautilus_file_get_search_fts_snippet (file);
     }
 
     gtk_label_set_text (GTK_LABEL (self->path), path_text);
-    gtk_label_set_text (GTK_LABEL (self->name_zh), name_zh);
-    gtk_widget_set_visible (self->name_zh, name_zh != NULL && name_zh[0] != '\0');
+    gtk_label_set_text (GTK_LABEL (self->desc), desc);
+    gtk_widget_set_visible (self->desc, desc != NULL && desc[0] != '\0');
     if (fts_snippet != NULL &&
         !g_str_equal (gtk_label_get_text (self->snippet), fts_snippet))
     {
@@ -498,7 +498,7 @@ nautilus_name_cell_class_init (NautilusNameCellClass *klass)
     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, snippet_button);
     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, snippet);
     gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, path);
-    gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, name_zh);
+    gtk_widget_class_bind_template_child (widget_class, NautilusNameCell, desc);
 
     gtk_widget_class_bind_template_callback (widget_class, on_label_query_tooltip);
     gtk_widget_class_bind_template_callback (widget_class, popover_show_cb);

@@ -103,3 +103,13 @@
      **注意 Python 侧 `Gio.Settings.new()` 同样会 abort,`try/except` 抓不住**——必须先 lookup,
      再用 `Settings.new_full(schema, None, None)`
 - **通用教训**:fork 的任何键/文件都不要落在发行版包拥有的路径上;读取第三方可能缺失的键时先做存在性检查
+
+## 16. 改了 .blp 却不重编译(blueprint 目标输出声明为目录)
+
+- **现象**:改了 `src/resources/ui/*.blp`(如模板子件改名),`ninja` 报编译成功,但生成的 `.ui` 仍是旧的,运行期 `bind_template_child` 拿不到子件
+- **原因**:`src/resources/meson.build` 的 `blueprints` 自定义目标把 `output` 声明为 `.`(整个构建目录),而 `gnome.compile_resources` 又往同一目录写 `nautilus-resources.c` —— 目录 mtime 被不断推新,始终"比输入新",ninja 便认为无需重跑
+- **处理**:改完 `.blp` 后 `touch` 该文件再构建:
+  ```sh
+  touch src/resources/ui/<改过的>.blp && ninja -C build src/nautilus-plus
+  ```
+  验证方式:`grep 'id="desc"' build/src/resources/ui/<对应>.ui` 应能看到新子件名

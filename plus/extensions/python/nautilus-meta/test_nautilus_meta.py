@@ -144,95 +144,95 @@ def _load_extension():
     sys.modules['gi'] = gi
     sys.modules['gi.repository'] = repository
 
-    path = Path(__file__).with_name('project-name-zh.py')
-    spec = importlib.util.spec_from_file_location('project_name_zh', path)
+    path = Path(__file__).with_name('nautilus-meta.py')
+    spec = importlib.util.spec_from_file_location('nautilus_meta', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module._test_home = temp_home
     return module
 
 
-project_name_zh = _load_extension()
+nautilus_meta = _load_extension()
 
 
-class ProjectYamlTests(unittest.TestCase):
+class FolderYamlTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        self.path = Path(self.folder.name) / project_name_zh.YAML_NAME
+        self.path = Path(self.folder.name) / nautilus_meta.YAML_NAME
 
     def tearDown(self):
         self.folder.cleanup()
 
     def test_creates_yaml(self):
-        project_name_zh._write_name_zh(self.folder.name, '新项目')
-        self.assertEqual(self.path.read_text(encoding='utf-8'), 'name-zh: 新项目\n')
+        nautilus_meta._write_desc(self.folder.name, '新项目')
+        self.assertEqual(self.path.read_text(encoding='utf-8'), 'desc: 新项目\n')
 
     def test_replaces_value_and_preserves_comments_and_fields(self):
-        original = '# header\nname-zh: old  # keep this\narchived: true\n'
+        original = '# header\ndesc: old  # keep this\narchived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._write_name_zh(self.folder.name, '新项目')
+        nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            '# header\nname-zh: 新项目  # keep this\narchived: true\n',
+            '# header\ndesc: 新项目  # keep this\narchived: true\n',
         )
 
     def test_appends_missing_key_before_document_end(self):
         self.path.write_text('archived: true\n...\n', encoding='utf-8')
-        project_name_zh._write_name_zh(self.folder.name, '新项目')
+        nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            'archived: true\nname-zh: 新项目\n...\n',
+            'archived: true\ndesc: 新项目\n...\n',
         )
 
     def test_replaces_block_scalar_with_single_line_value(self):
-        original = 'name-zh: >\n  old\narchived: true\n'
+        original = 'desc: >\n  old\narchived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._write_name_zh(self.folder.name, '新项目')
+        nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            'name-zh: 新项目\narchived: true\n',
+            'desc: 新项目\narchived: true\n',
         )
 
     def test_rejects_duplicate_name_keys_without_overwriting(self):
-        original = 'name-zh: one\nname-zh: two\n'
+        original = 'desc: one\ndesc: two\n'
         self.path.write_text(original, encoding='utf-8')
         with self.assertRaises(ValueError):
-            project_name_zh._write_name_zh(self.folder.name, '新项目')
+            nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_updates_flow_mapping(self):
         self.path.write_text('{archived: true}\n', encoding='utf-8')
-        project_name_zh._write_name_zh(self.folder.name, '新项目')
+        nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            '{archived: true, name-zh: 新项目}\n',
+            '{archived: true, desc: 新项目}\n',
         )
 
     def test_rejects_invalid_yaml_without_overwriting(self):
         original = 'archived: [\n'
         self.path.write_text(original, encoding='utf-8')
         with self.assertRaises(ValueError):
-            project_name_zh._write_name_zh(self.folder.name, '新项目')
+            nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_rejects_non_mapping_without_overwriting(self):
         original = '- one\n- two\n'
         self.path.write_text(original, encoding='utf-8')
         with self.assertRaises(ValueError):
-            project_name_zh._write_name_zh(self.folder.name, '新项目')
+            nautilus_meta._write_desc(self.folder.name, '新项目')
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_empty_value_removes_key_and_file(self):
-        self.path.write_text('name-zh: 旧名\n', encoding='utf-8')
-        project_name_zh._remove_key_in_folder(self.folder.name,
-                                              project_name_zh.ATTR)
+        self.path.write_text('desc: 旧名\n', encoding='utf-8')
+        nautilus_meta._remove_key_in_folder(self.folder.name,
+                                              nautilus_meta.ATTR)
         self.assertFalse(self.path.exists())
 
     def test_empty_value_keeps_other_fields(self):
-        original = '# header\nname-zh: old  # keep\narchived: true\n'
+        original = '# header\ndesc: old  # keep\narchived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._remove_key_in_folder(self.folder.name,
-                                              project_name_zh.ATTR)
+        nautilus_meta._remove_key_in_folder(self.folder.name,
+                                              nautilus_meta.ATTR)
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
             '# header\narchived: true\n',
@@ -241,92 +241,92 @@ class ProjectYamlTests(unittest.TestCase):
     def test_remove_without_key_leaves_file_alone(self):
         original = 'archived: true\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._remove_key_in_folder(self.folder.name,
-                                              project_name_zh.ATTR)
+        nautilus_meta._remove_key_in_folder(self.folder.name,
+                                              nautilus_meta.ATTR)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_remove_missing_file_is_noop(self):
-        project_name_zh._remove_key_in_folder(self.folder.name,
-                                              project_name_zh.ATTR)
+        nautilus_meta._remove_key_in_folder(self.folder.name,
+                                              nautilus_meta.ATTR)
         self.assertFalse(self.path.exists())
 
     def test_rejects_blank_and_multiline_values(self):
         with self.assertRaises(ValueError):
-            project_name_zh._write_name_zh(self.folder.name, 'one\ntwo')
+            nautilus_meta._write_desc(self.folder.name, 'one\ntwo')
         self.assertFalse(self.path.exists())
 
 
 class ArchiveTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
-        self.path = Path(self.folder.name) / project_name_zh.YAML_NAME
+        self.path = Path(self.folder.name) / nautilus_meta.YAML_NAME
 
     def tearDown(self):
         self.folder.cleanup()
 
     def test_archive_creates_yaml(self):
-        project_name_zh._set_archived(self.folder.name, True)
+        nautilus_meta._set_archived(self.folder.name, True)
         self.assertEqual(self.path.read_text(encoding='utf-8'),
                          'archived: true\n')
 
     def test_archive_appends_preserving_comments_and_fields(self):
-        original = '# 项目\nname-zh: 阿尔法  # 保留\n'
+        original = '# 项目\ndesc: 阿尔法  # 保留\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._set_archived(self.folder.name, True)
+        nautilus_meta._set_archived(self.folder.name, True)
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            '# 项目\nname-zh: 阿尔法  # 保留\narchived: true\n',
+            '# 项目\ndesc: 阿尔法  # 保留\narchived: true\n',
         )
 
     def test_archive_replaces_existing_value(self):
-        original = '# c\narchived: false  # note\nname-zh: x\n'
+        original = '# c\narchived: false  # note\ndesc: x\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._set_archived(self.folder.name, True)
+        nautilus_meta._set_archived(self.folder.name, True)
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            '# c\narchived: true  # note\nname-zh: x\n',
+            '# c\narchived: true  # note\ndesc: x\n',
         )
 
     def test_unarchive_removes_line_and_keeps_rest(self):
-        original = 'name-zh: 阿尔法\narchived: true  # note\nother: y\n'
+        original = 'desc: 阿尔法\narchived: true  # note\nother: y\n'
         self.path.write_text(original, encoding='utf-8')
-        project_name_zh._set_archived(self.folder.name, False)
+        nautilus_meta._set_archived(self.folder.name, False)
         self.assertEqual(
             self.path.read_text(encoding='utf-8'),
-            'name-zh: 阿尔法\nother: y\n',
+            'desc: 阿尔法\nother: y\n',
         )
 
     def test_unarchive_deletes_file_when_empty(self):
         self.path.write_text('archived: true\n', encoding='utf-8')
-        project_name_zh._set_archived(self.folder.name, False)
+        nautilus_meta._set_archived(self.folder.name, False)
         self.assertFalse(self.path.exists())
 
     def test_unarchive_missing_file_is_noop(self):
-        project_name_zh._set_archived(self.folder.name, False)
+        nautilus_meta._set_archived(self.folder.name, False)
         self.assertFalse(self.path.exists())
 
     def test_archive_is_idempotent(self):
         original = '# keep\narchived: true\n'
         self.path.write_text(original, encoding='utf-8')
         mtime_before = self.path.stat().st_mtime_ns
-        project_name_zh._set_archived(self.folder.name, True)
+        nautilus_meta._set_archived(self.folder.name, True)
         self.assertEqual(self.path.stat().st_mtime_ns, mtime_before)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
     def test_unarchive_flow_mapping_keeps_braces(self):
-        self.path.write_text('{archived: true, name-zh: a}\n',
+        self.path.write_text('{archived: true, desc: a}\n',
                              encoding='utf-8')
-        project_name_zh._set_archived(self.folder.name, False)
+        nautilus_meta._set_archived(self.folder.name, False)
         result = self.path.read_text(encoding='utf-8')
         import yaml as _yaml
         data = _yaml.safe_load(result)
-        self.assertEqual(data, {'name-zh': 'a'})
+        self.assertEqual(data, {'desc': 'a'})
 
     def test_rejects_malformed_yaml_on_unarchive(self):
         original = 'archived: [\n'
         self.path.write_text(original, encoding='utf-8')
         with self.assertRaises(ValueError):
-            project_name_zh._set_archived(self.folder.name, False)
+            nautilus_meta._set_archived(self.folder.name, False)
         self.assertEqual(self.path.read_text(encoding='utf-8'), original)
 
 
@@ -334,29 +334,29 @@ class HideArchivedStateTests(unittest.TestCase):
     """hide-archived lives in the fork's own gsettings schema."""
 
     def setUp(self):
-        self.prefs = project_name_zh._plus_settings
+        self.prefs = nautilus_meta._plus_settings
 
     def test_defaults_to_show(self):
-        self.assertFalse(project_name_zh._hide_archived())
+        self.assertFalse(nautilus_meta._hide_archived())
 
     def test_round_trip(self):
-        project_name_zh._set_hide_archived(True)
-        self.assertTrue(project_name_zh._hide_archived())
+        nautilus_meta._set_hide_archived(True)
+        self.assertTrue(nautilus_meta._hide_archived())
         # Captions switch untouched.
-        self.assertTrue(project_name_zh._enabled())
-        project_name_zh._set_hide_archived(False)
-        self.assertFalse(project_name_zh._hide_archived())
+        self.assertTrue(nautilus_meta._enabled())
+        nautilus_meta._set_hide_archived(False)
+        self.assertFalse(nautilus_meta._hide_archived())
 
     def test_set_enabled_preserves_hide_archived(self):
-        project_name_zh._set_hide_archived(True)
-        project_name_zh._set_enabled(False)
-        self.assertFalse(project_name_zh._enabled())
+        nautilus_meta._set_hide_archived(True)
+        nautilus_meta._set_enabled(False)
+        self.assertFalse(nautilus_meta._enabled())
         self.assertTrue(self.prefs.values['hide-archived'])
 
     def test_state_file_only_holds_captions_switch(self):
-        project_name_zh._set_enabled(False)
-        project_name_zh._set_hide_archived(True)
-        content = Path(project_name_zh.STATE_FILE).read_text(encoding='utf-8')
+        nautilus_meta._set_enabled(False)
+        nautilus_meta._set_hide_archived(True)
+        content = Path(nautilus_meta.STATE_FILE).read_text(encoding='utf-8')
         self.assertNotIn('hide-archived', content)
 
 
@@ -371,71 +371,114 @@ class MissingPlusSchemaTests(unittest.TestCase):
         _SettingsSchemaSource.schemas = self._saved
 
     def test_settings_object_is_none(self):
-        self.assertIsNone(project_name_zh._open_plus_settings())
+        self.assertIsNone(nautilus_meta._open_plus_settings())
 
     def test_reads_and_writes_degrade_without_raising(self):
-        original = project_name_zh._plus_settings
-        project_name_zh._plus_settings = project_name_zh._open_plus_settings()
-        self.addCleanup(setattr, project_name_zh, '_plus_settings', original)
+        original = nautilus_meta._plus_settings
+        nautilus_meta._plus_settings = nautilus_meta._open_plus_settings()
+        self.addCleanup(setattr, nautilus_meta, '_plus_settings', original)
 
-        self.assertFalse(project_name_zh._hide_archived())
-        project_name_zh._set_hide_archived(True)  # silent no-op
-        self.assertFalse(project_name_zh._hide_archived())
+        self.assertFalse(nautilus_meta._hide_archived())
+        nautilus_meta._set_hide_archived(True)  # silent no-op
+        self.assertFalse(nautilus_meta._hide_archived())
 
     def test_toggle_is_not_offered(self):
-        original_running = project_name_zh._running_as_plus
-        original_settings = project_name_zh._plus_settings
-        project_name_zh._running_as_plus = lambda *args, **kwargs: True
-        project_name_zh._plus_settings = None
-        self.addCleanup(setattr, project_name_zh, '_running_as_plus',
+        original_running = nautilus_meta._running_as_plus
+        original_settings = nautilus_meta._plus_settings
+        nautilus_meta._running_as_plus = lambda *args, **kwargs: True
+        nautilus_meta._plus_settings = None
+        self.addCleanup(setattr, nautilus_meta, '_running_as_plus',
                         original_running)
-        self.addCleanup(setattr, project_name_zh, '_plus_settings',
+        self.addCleanup(setattr, nautilus_meta, '_plus_settings',
                         original_settings)
 
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         items = menu.get_background_items(_FileInfo('file:///tmp/project'))
         names = [item.kwargs['name'] for item in items]
-        self.assertNotIn('ProjectNameZh::ToggleHideArchived', names)
+        self.assertNotIn('FolderMeta::ToggleHideArchived', names)
 
     def test_toggle_is_offered_when_schema_is_available(self):
-        original_running = project_name_zh._running_as_plus
-        project_name_zh._running_as_plus = lambda *args, **kwargs: True
-        self.addCleanup(setattr, project_name_zh, '_running_as_plus',
+        original_running = nautilus_meta._running_as_plus
+        nautilus_meta._running_as_plus = lambda *args, **kwargs: True
+        self.addCleanup(setattr, nautilus_meta, '_running_as_plus',
                         original_running)
 
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         items = menu.get_background_items(_FileInfo('file:///tmp/project'))
         names = [item.kwargs['name'] for item in items]
-        self.assertIn('ProjectNameZh::ToggleHideArchived', names)
+        self.assertIn('FolderMeta::ToggleHideArchived', names)
+
+
+class CaptionsMigrationTests(unittest.TestCase):
+    """Captions written before the name-zh -> desc rename are carried over.
+
+    Missing this would leave an unresolvable caption line behind *and* make
+    the code clobber the user's original caption backup.
+    """
+
+    def setUp(self):
+        self._saved = nautilus_meta._captions()
+        nautilus_meta._clear_captions_backup()
+
+    def tearDown(self):
+        nautilus_meta._set_captions(self._saved)
+        nautilus_meta._clear_captions_backup()
+
+    def test_legacy_caption_is_renamed_in_place(self):
+        nautilus_meta._set_captions(['name-zh'])
+        nautilus_meta._sync_captions(True)
+        self.assertEqual(nautilus_meta._captions(), ['desc'])
+
+    def test_rename_does_not_clobber_the_backup(self):
+        nautilus_meta._save_captions_backup(['none', 'none', 'none'])
+        nautilus_meta._set_captions(['name-zh'])
+        nautilus_meta._sync_captions(True)
+        self.assertEqual(nautilus_meta._load_captions_backup(),
+                         ['none', 'none', 'none'])
+
+    def test_backup_with_legacy_name_is_normalized(self):
+        nautilus_meta._save_captions_backup(['name-zh', 'size'])
+        self.assertEqual(nautilus_meta._load_captions_backup(),
+                         ['desc', 'size'])
+
+    def test_duplicates_collapse(self):
+        nautilus_meta._set_captions(['name-zh', 'desc'])
+        nautilus_meta._sync_captions(True)
+        self.assertEqual(nautilus_meta._captions(), ['desc'])
+
+    def test_disabling_drops_the_legacy_caption(self):
+        nautilus_meta._set_captions(['name-zh', 'size'])
+        nautilus_meta._sync_captions(False)
+        self.assertEqual(nautilus_meta._captions(), ['size'])
 
 
 class RunningAsPlusTests(unittest.TestCase):
     def test_detection_matches_fork_name(self):
-        self.assertTrue(project_name_zh._running_as_plus(
+        self.assertTrue(nautilus_meta._running_as_plus(
             ['/usr/bin/nautilus-plus']))
-        self.assertTrue(project_name_zh._running_as_plus(
+        self.assertTrue(nautilus_meta._running_as_plus(
             ['/proc/exe', 'nautilus-plus', '/usr/bin/python3']))
-        self.assertFalse(project_name_zh._running_as_plus(
+        self.assertFalse(nautilus_meta._running_as_plus(
             ['/usr/bin/nautilus', '--gapplication-service']))
-        self.assertFalse(project_name_zh._running_as_plus([]))
+        self.assertFalse(nautilus_meta._running_as_plus([]))
 
     def test_stock_nautilus_gets_no_hide_menu(self):
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         folder = _FileInfo('file:///tmp/project')
         items = menu.get_background_items(folder)
         names = [item.kwargs['name'] for item in items]
-        self.assertNotIn('ProjectNameZh::ToggleHideArchived', names)
+        self.assertNotIn('FolderMeta::ToggleHideArchived', names)
 
 
 class MenuFilterTests(unittest.TestCase):
     def test_only_single_local_folder_gets_menu(self):
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         folder = _FileInfo('file:///tmp/project')
         regular_file = _FileInfo('file:///tmp/notes.txt', directory=False)
         remote_folder = _FileInfo('sftp://host/project')
         items = menu.get_file_items([folder])
         labels = [item.kwargs['label'] for item in items]
-        self.assertEqual(labels, ['修改中文名', '归档'])
+        self.assertEqual(labels, ['修改描述', '归档'])
         # Remote members are dropped; the local one still gets the toggle.
         items = menu.get_file_items([folder, remote_folder])
         labels = [item.kwargs['label'] for item in items]
@@ -444,23 +487,23 @@ class MenuFilterTests(unittest.TestCase):
         self.assertEqual(menu.get_file_items([remote_folder]), [])
 
     def test_multi_select_shows_only_archive_toggle(self):
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         folders = [_FileInfo('file:///tmp/a'), _FileInfo('file:///tmp/b')]
         items = menu.get_file_items(folders)
         labels = [item.kwargs['label'] for item in items]
         self.assertEqual(labels, ['归档'])
 
     def test_all_archived_selection_offers_unarchive(self):
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         with tempfile.TemporaryDirectory() as d:
-            path = Path(d) / project_name_zh.YAML_NAME
+            path = Path(d) / nautilus_meta.YAML_NAME
             path.write_text('archived: true\n', encoding='utf-8')
             folder = _FileInfo('file://' + d)
             items = menu.get_file_items([folder])
             self.assertEqual(items[-1].kwargs['label'], '取消归档')
 
     def test_non_folder_selection_gets_nothing(self):
-        menu = project_name_zh.ProjectNameZhMenu()
+        menu = nautilus_meta.FolderMetaMenu()
         regular_file = _FileInfo('file:///tmp/notes.txt', directory=False)
         self.assertEqual(menu.get_file_items([regular_file]), [])
 

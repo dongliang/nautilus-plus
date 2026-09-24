@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Nautilus extension: show Chinese project names from .project.yaml.
+"""Nautilus extension: show folder descriptions from .folder.yaml.
 
-For every folder whose `.project.yaml` has a top-level `name-zh` key, the
-Chinese name is shown as a caption line right below the folder name in
+For every folder whose `.folder.yaml` has a top-level `desc` key, the
+description is shown as a caption line right below the folder name in
 icon view. The real folder name (and path) is never changed, and normal
-renaming (F2) is unaffected — edit `.project.yaml` to change the Chinese
-name.
+renaming (F2) is unaffected — edit `.folder.yaml` to change the
+description.
 
 The extension also drives the fork's grouped view: a folder whose
-`.project.yaml` has `archived: true` (strictly the YAML boolean true) gets
+`.folder.yaml` has `archived: true` (strictly the YAML boolean true) gets
 the `group` extension attribute "已归档", which the fork's C sorters use to
 partition the view — archived folders form a trailing "已归档" group with a
 header, ungrouped items stay in front without one. Grouping is independent
-of the switch below (it only controls the Chinese captions).
+of the switch below (it only controls the description captions).
 
 Folders can be archived and unarchived from the selection context menu
 (multi-select supported): the action writes or removes `archived: true`
-in each folder's `.project.yaml`, reusing the same comment-preserving
-local update as the Chinese-name editor.
+in each folder's `.folder.yaml`, reusing the same comment-preserving
+local update as the description editor.
 
 Archived folders can be hidden entirely (background context menu):
 the fork's C layer filters out items carrying the archived group key,
@@ -34,10 +34,10 @@ has no filter hook, so the toggle would do nothing there.
 A global on/off switch lives in the background context menu (right-click
 empty space in a folder). Toggling takes effect immediately, and the menu
 label flips to match within a moment. The switch state is stored in
-~/.config/nautilus-project-zh/state (default: on).
+~/.config/nautilus-meta/state (default: on).
 
 Install:
-    cp project-name-zh.py ~/.local/share/nautilus-python/extensions/
+    cp nautilus-meta.py ~/.local/share/nautilus-python/extensions/
     nautilus -q        # restart nautilus
 """
 
@@ -53,7 +53,7 @@ import yaml
 
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Nautilus
 
-CONFIG_DIR = os.path.expanduser('~/.config/nautilus-project-zh')
+CONFIG_DIR = os.path.expanduser('~/.config/nautilus-meta')
 STATE_FILE = os.path.join(CONFIG_DIR, 'state')
 CAPTIONS_BACKUP = os.path.join(CONFIG_DIR, 'captions-backup.json')
 
@@ -65,11 +65,15 @@ ICON_VIEW_SCHEMA = 'org.gnome.nautilus.icon-view'
 PLUS_SCHEMA = 'org.gnome.NautilusPlus.preferences'
 HIDE_ARCHIVED_KEY = 'hide-archived'
 CAPTIONS_KEY = 'captions'
-ATTR = 'name-zh'
+ATTR = 'desc'
+# Attribute name used before the rename to 'desc'; captions written by an
+# older build still carry it and are carried over on sight (see
+# _normalize_captions).
+LEGACY_ATTRS = ('name-zh',)
 GROUP_ATTR = 'group'
 ARCHIVED_KEY = 'archived'
 ARCHIVED_LABEL = '已归档'
-YAML_NAME = '.project.yaml'
+YAML_NAME = '.folder.yaml'
 YAML_MAX_SIZE = 1024 * 1024
 
 _settings = Gio.Settings.new(ICON_VIEW_SCHEMA)
@@ -86,7 +90,7 @@ def _open_plus_settings():
         source = Gio.SettingsSchemaSource.get_default()
         schema = source.lookup(PLUS_SCHEMA, True) if source is not None else None
         if schema is None or not schema.has_key(HIDE_ARCHIVED_KEY):
-            print(f'project-name-zh: schema {PLUS_SCHEMA!r} is missing; '
+            print(f'nautilus-meta: schema {PLUS_SCHEMA!r} is missing; '
                   'hide-archived stays disabled until nautilus-plus is '
                   'installed again.', file=sys.stderr)
             return None
@@ -101,7 +105,7 @@ def _open_plus_settings():
 
 _plus_settings = _open_plus_settings()
 
-# folder_path -> (mtime, name_zh | None, archived: bool)
+# folder_path -> (mtime, desc | None, archived: bool)
 _yaml_cache = {}
 # folders we ever showed a Chinese name for; the source of truth for
 # clearing stale captions (yaml deleted / key removed / switch off)
@@ -203,10 +207,10 @@ def _atomic_write(path, text, mode=None):
         raise
 
 
-# --- .project.yaml --------------------------------------------------------
+# --- .folder.yaml --------------------------------------------------------
 
 def _yaml_info(folder_path):
-    """(name-zh, archived) from the folder's .project.yaml. Cached by mtime."""
+    """(desc, archived) from the folder's .folder.yaml. Cached by mtime."""
     yaml_path = os.path.join(folder_path, YAML_NAME)
     try:
         mtime = os.path.getmtime(yaml_path)
@@ -223,12 +227,12 @@ def _yaml_info(folder_path):
             with open(yaml_path, encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             if isinstance(data, dict):
-                value = data.get('name-zh')
+                value = data.get(ATTR)
                 if isinstance(value, str) and value.strip():
                     name = value.strip()
                 # Strict: only the YAML boolean true marks a folder archived.
                 # (PyYAML is YAML 1.1, so yes/on also parse as True — the
-                # .project.yaml convention is to write true/false only.)
+                # .folder.yaml convention is to write true/false only.)
                 archived = data.get('archived') is True
     except (yaml.YAMLError, UnicodeDecodeError, OSError, ValueError):
         pass
@@ -240,7 +244,7 @@ def _yaml_info(folder_path):
 
 def _yaml_scalar(value):
     if '\n' in value or '\r' in value:
-        raise ValueError('中文名不能包含换行')
+        raise ValueError('描述不能包含换行')
     lines = yaml.safe_dump(value, allow_unicode=True,
                            default_flow_style=True,
                            sort_keys=False).splitlines()
@@ -249,10 +253,10 @@ def _yaml_scalar(value):
     elif len(lines) == 1:
         scalar = lines[0]
     else:
-        raise ValueError('中文名无法写入 YAML')
+        raise ValueError('描述无法写入 YAML')
     parsed = yaml.safe_load(f'{ATTR}: {scalar}\n')
     if not isinstance(parsed, dict) or parsed.get(ATTR) != value:
-        raise ValueError('中文名无法写入 YAML')
+        raise ValueError('描述无法写入 YAML')
     return scalar
 
 
@@ -267,9 +271,9 @@ def _replace_yaml_key(text, key, scalar):
         data = yaml.safe_load(text)
         node = yaml.compose(text)
     except (yaml.YAMLError, UnicodeDecodeError, ValueError) as error:
-        raise ValueError('现有 .project.yaml 格式无效') from error
+        raise ValueError('现有 .folder.yaml 格式无效') from error
     if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
-        raise ValueError('.project.yaml 顶层必须是对象')
+        raise ValueError('.folder.yaml 顶层必须是对象')
 
     value_nodes = []
     for key_node, value_node in node.value:
@@ -278,7 +282,7 @@ def _replace_yaml_key(text, key, scalar):
                 and key_node.value == key):
             value_nodes.append(value_node)
     if len(value_nodes) > 1:
-        raise ValueError(f'.project.yaml 中存在重复的 {key}')
+        raise ValueError(f'.folder.yaml 中存在重复的 {key}')
 
     newline = '\r\n' if '\r\n' in text else '\n'
     if value_nodes:
@@ -293,7 +297,7 @@ def _replace_yaml_key(text, key, scalar):
     if node.flow_style:
         close = text.rfind('}', node.start_mark.index, node.end_mark.index)
         if close < 0:
-            raise ValueError('无法定位 .project.yaml 的顶层对象')
+            raise ValueError('无法定位 .folder.yaml 的顶层对象')
         # A trailing comma before '}' is valid YAML; don't double it.
         prefix = text[:close].rstrip()
         if prefix.endswith(','):
@@ -328,9 +332,9 @@ def _remove_yaml_key(text, key):
         data = yaml.safe_load(text)
         node = yaml.compose(text)
     except (yaml.YAMLError, UnicodeDecodeError, ValueError) as error:
-        raise ValueError('现有 .project.yaml 格式无效') from error
+        raise ValueError('现有 .folder.yaml 格式无效') from error
     if not isinstance(data, dict) or not isinstance(node, yaml.MappingNode):
-        raise ValueError('.project.yaml 顶层必须是对象')
+        raise ValueError('.folder.yaml 顶层必须是对象')
 
     matches = [
         (key_node, value_node)
@@ -342,7 +346,7 @@ def _remove_yaml_key(text, key):
     if not matches:
         return None
     if len(matches) > 1:
-        raise ValueError(f'.project.yaml 中存在重复的 {key}')
+        raise ValueError(f'.folder.yaml 中存在重复的 {key}')
 
     key_node, value_node = matches[0]
     if node.flow_style:
@@ -380,7 +384,7 @@ def _remove_yaml_key(text, key):
 
 
 def _update_yaml_file(folder_path, update):
-    """Apply update(original_text) -> new text to .project.yaml atomically.
+    """Apply update(original_text) -> new text to .folder.yaml atomically.
 
     An update returning '' deletes the file; None is a no-op. Missing file
     starts from '' (the updater produces the initial content).
@@ -392,7 +396,7 @@ def _update_yaml_file(folder_path, update):
         _atomic_write(yaml_path, update(''), 0o644)
         return
     if file_stat.st_size > YAML_MAX_SIZE:
-        raise ValueError('.project.yaml 文件过大')
+        raise ValueError('.folder.yaml 文件过大')
     with open(yaml_path, encoding='utf-8', newline='') as f:
         original = f.read()
     result = update(original)
@@ -404,10 +408,10 @@ def _update_yaml_file(folder_path, update):
         _atomic_write(yaml_path, result, stat.S_IMODE(file_stat.st_mode))
 
 
-def _write_name_zh(folder_path, value):
+def _write_desc(folder_path, value):
     value = value.strip()
     if not value:
-        raise ValueError('中文名不能为空')
+        raise ValueError('描述不能为空')
     scalar = _yaml_scalar(value)
 
     def update(text):
@@ -418,14 +422,14 @@ def _write_name_zh(folder_path, value):
 
 
 def _remove_key_in_folder(folder_path, key):
-    """Drop a top-level key; delete .project.yaml if nothing else remains."""
+    """Drop a top-level key; delete .folder.yaml if nothing else remains."""
     yaml_path = os.path.join(folder_path, YAML_NAME)
     try:
         file_stat = os.stat(yaml_path)
     except FileNotFoundError:
         return  # Nothing to remove.
     if file_stat.st_size > YAML_MAX_SIZE:
-        raise ValueError('.project.yaml 文件过大')
+        raise ValueError('.folder.yaml 文件过大')
     with open(yaml_path, encoding='utf-8', newline='') as f:
         original = f.read()
     result = _remove_yaml_key(original, key)
@@ -438,7 +442,7 @@ def _remove_key_in_folder(folder_path, key):
 
 
 def _set_archived(folder_path, archived):
-    """Write or remove `archived: true` in the folder's .project.yaml.
+    """Write or remove `archived: true` in the folder's .folder.yaml.
 
     Removing it deletes the file when no other data remains. Idempotent:
     a folder already in the requested state is left untouched (missing
@@ -462,8 +466,8 @@ def _set_archived(folder_path, archived):
 
 # --- icon-view captions ---------------------------------------------------
 # The name label under the icon is always shown; captions are extra lines
-# below it. Making 'name-zh' the first caption puts the Chinese name
-# directly under the English one.
+# below it. Making 'desc' the first caption puts the description directly
+# under the name.
 
 def _captions():
     return list(_settings.get_strv(CAPTIONS_KEY))
@@ -486,7 +490,10 @@ def _load_captions_backup():
         return None
     if not isinstance(backup, list) or not all(isinstance(c, str) for c in backup):
         return None
-    return backup
+    normalized = _normalize_captions(backup)
+    if normalized != backup:
+        _save_captions_backup(normalized)
+    return normalized
 
 
 def _clear_captions_backup():
@@ -496,9 +503,35 @@ def _clear_captions_backup():
         pass
 
 
+def _normalize_captions(captions):
+    """Carry captions written by older builds over to today's attribute name.
+
+    'name-zh' became 'desc'. Without this the stale entry would linger as a
+    caption nothing resolves, and the list still holding the old name would
+    look like "the attribute is not set yet" -- making the code overwrite the
+    user's original backup.
+    """
+    if not any(c in LEGACY_ATTRS for c in captions):
+        return captions
+    seen = set()
+    normalized = []
+    for caption in captions:
+        caption = ATTR if caption in LEGACY_ATTRS else caption
+        if caption not in seen:
+            seen.add(caption)
+            normalized.append(caption)
+    return normalized
+
+
 def _sync_captions(enabled):
-    """On: make 'name-zh' the first caption. Off: restore what the user had."""
+    """On: make 'desc' the first caption. Off: restore what the user had."""
     captions = _captions()
+    normalized = _normalize_captions(captions)
+    if normalized != captions:
+        # Write the rename through, so the stale attribute is gone for good.
+        _set_captions(normalized)
+        captions = normalized
+
     if enabled:
         if ATTR not in captions:
             _save_captions_backup(captions)
@@ -528,7 +561,7 @@ def _local_folder_path(file):
 
 
 def _apply(file):
-    """Set/clear the name-zh and group extension attributes for one file.
+    """Set/clear the desc and group extension attributes for one file.
 
     The group attribute is independent of the on/off switch: the switch only
     controls the Chinese captions. Archived folders are always grouped.
@@ -543,7 +576,7 @@ def _apply(file):
         _shown.add(folder)
     elif folder in _shown:
         # Extension attributes have no removal: an empty value clears the
-        # line. Needed when name-zh is removed or the switch is turned off.
+        # line. Needed when desc is removed or the switch is turned off.
         file.add_string_attribute(ATTR, '')
 
     if archived is True:
@@ -619,7 +652,7 @@ def _active_window():
     return None
 
 
-class ProjectNameZhInfoProvider(GObject.GObject, Nautilus.InfoProvider):
+class FolderMetaInfoProvider(GObject.GObject, Nautilus.InfoProvider):
     """Shows the Chinese name via a caption extension attribute."""
 
     def __init__(self):
@@ -629,7 +662,7 @@ class ProjectNameZhInfoProvider(GObject.GObject, Nautilus.InfoProvider):
         _apply(file)
 
 
-class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
+class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
     """Provides the project-name action and the global caption switch."""
 
     def __init__(self):
@@ -638,8 +671,8 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         self._alerts = set()
 
     def get_file_items(self, files):
-        # Multi-selection keeps the batch archive toggle only — "修改中文
-        # 名" makes no sense when the user selected more than one item,
+        # Multi-selection keeps the batch archive toggle only — editing the
+        # description makes no sense when the user selected more than one item,
         # even if some of them are not local folders.
         folders = [(file, path) for file in files
                    if (path := _local_folder_path(file)) is not None]
@@ -653,9 +686,9 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         if single:
             file, _folder = folders[0]
             items.append(Nautilus.MenuItem(
-                name='ProjectNameZh::EditName',
-                label='修改中文名',
-                tip='编辑文件夹 .project.yaml 中的 name-zh',
+                name='FolderMeta::EditDesc',
+                label='修改描述',
+                tip='编辑文件夹 .folder.yaml 中的 desc',
                 icon=None,
             ))
             items[-1].connect('activate', self._on_edit_name, file)
@@ -666,9 +699,9 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         all_archived = all(_yaml_info(folder)[1] is True
                            for _file, folder in folders)
         items.append(Nautilus.MenuItem(
-            name='ProjectNameZh::ToggleArchived',
+            name='FolderMeta::ToggleArchived',
             label='取消归档' if all_archived else '归档',
-            tip='切换文件夹 .project.yaml 中的 archived: true',
+            tip='切换文件夹 .folder.yaml 中的 archived: true',
             icon=None,
         ))
         items[-1].connect('activate', self._on_toggle_archived,
@@ -683,7 +716,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             except Exception as error:
                 traceback.print_exc()
                 failures.append(f'{os.path.basename(folder)}: '
-                                f'{error or "写入 .project.yaml 失败"}')
+                                f'{error or "写入 .folder.yaml 失败"}')
                 continue
             _yaml_cache.pop(folder, None)
             _apply(file)
@@ -702,7 +735,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             return
 
         name, _archived = _yaml_info(folder)
-        window = Gtk.Window(title='修改中文名')
+        window = Gtk.Window(title='修改描述')
         window.set_default_size(420, 120)
         window.set_modal(True)
         window.set_destroy_with_parent(True)
@@ -713,7 +746,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         for margin in ('top', 'bottom', 'start', 'end'):
             getattr(box, f'set_margin_{margin}')(18)
-        label = Gtk.Label(label='中文名')
+        label = Gtk.Label(label='描述')
         label.set_xalign(0)
         entry = Gtk.Entry()
         entry.set_hexpand(True)
@@ -776,7 +809,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         value = entry.get_text().strip()
         try:
             if value:
-                _write_name_zh(folder, value)
+                _write_desc(folder, value)
             else:
                 # Empty input clears the Chinese name; the yaml file goes
                 # with it when no other data remains.
@@ -786,17 +819,17 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
             file.invalidate_extension_info()
         except Exception as error:
             traceback.print_exc()
-            self._show_error('无法修改中文名',
-                             str(error) or '写入 .project.yaml 失败。',
+            self._show_error('无法修改描述',
+                             str(error) or '写入 .folder.yaml 失败。',
                              parent=window)
             return
         window.close()
 
     def get_background_items(self, current_folder):
         item = Nautilus.MenuItem(
-            name='ProjectNameZh::Toggle',
-            label='隐藏中文项目名' if _enabled() else '显示中文项目名',
-            tip='在文件夹名下方显示 .project.yaml 中的 name-zh',
+            name='FolderMeta::ToggleDesc',
+            label='隐藏描述' if _enabled() else '显示描述',
+            tip='在文件夹名下方显示 .folder.yaml 中的 desc',
             icon=None,
         )
         item.connect('activate', self._on_toggle, current_folder)
@@ -808,7 +841,7 @@ class ProjectNameZhMenu(GObject.GObject, Nautilus.MenuProvider):
         # cannot have any effect.
         if _running_as_plus() and _plus_settings is not None:
             hide_item = Nautilus.MenuItem(
-                name='ProjectNameZh::ToggleHideArchived',
+                name='FolderMeta::ToggleHideArchived',
                 label='隐藏归档' if not _hide_archived() else '显示归档',
                 tip='切换已归档文件夹的可见性(由 nautilus-plus 过滤)',
                 icon=None,

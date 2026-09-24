@@ -9218,7 +9218,7 @@ update_hidden_group_card (NautilusFilesView *self)
 {
     g_autoptr (GPtrArray) items = NULL;
     g_autoptr (GString) details = NULL;
-    static GQuark name_zh_quark;
+    static GQuark desc_quark;
     guint count = 0;
     guint shown = 0;
 
@@ -9233,9 +9233,9 @@ update_hidden_group_card (NautilusFilesView *self)
         return;
     }
 
-    if (G_UNLIKELY (name_zh_quark == 0))
+    if (G_UNLIKELY (desc_quark == 0))
     {
-        name_zh_quark = g_quark_from_static_string ("name-zh");
+        desc_quark = g_quark_from_static_string ("desc");
     }
 
     details = g_string_new (NULL);
@@ -9254,10 +9254,10 @@ update_hidden_group_card (NautilusFilesView *self)
         count++;
         if (shown < 3)
         {
-            g_autofree char *name_zh =
-                nautilus_file_get_extension_attribute (file, name_zh_quark);
-            const char *name = (name_zh != NULL && name_zh[0] != '\0') ?
-                               name_zh : nautilus_file_get_display_name (file);
+            g_autofree char *desc =
+                nautilus_file_get_extension_attribute (file, desc_quark);
+            const char *name = (desc != NULL && desc[0] != '\0') ?
+                               desc : nautilus_file_get_display_name (file);
 
             if (details->len > 0)
             {

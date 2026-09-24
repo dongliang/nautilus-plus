@@ -5,7 +5,7 @@
  *
  * Grouped view support: the fork hook that partitions a file view into
  * groups driven by the "group" extension attribute written by extensions
- * (e.g. project-name-zh.py writes "已归档" for archived projects).
+ * (e.g. nautilus-meta.py writes "已归档" for archived projects).
  *
  * The hook only reads the extension attribute; it does not care who writes
  * it. The group contract — attribute name "group", NULL and "" both meaning

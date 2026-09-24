@@ -48,11 +48,11 @@ C 侧:   nautilus_file_get_extension_attribute(file, quark("group"))  ← 新增
 ```
 C 钩子(能力)                     Python 扩展(规则)
 ─────────────────────────────    ─────────────────────────
-nautilus-file.c                  project-name-zh.py
+nautilus-file.c                  nautilus-meta.py
   get_extension_attribute          _yaml_info → (name, archived)
 nautilus-grouped-view.c             archived is True → add_string_attribute('group', '已归档')
   get_group_string / 3 个 sorter 工厂  否则 → add_string_attribute('group', '') 清空
-nautilus-view-model.c            (分组与 name-zh 开关解耦:开关只控制中文名)
+nautilus-view-model.c            (分组与 desc 开关解耦:开关只控制描述)
   sort() 补发 sections-changed
 nautilus-list-view.c
   header factory + [group, dirs, col] + section sorter
@@ -95,6 +95,6 @@ nautilus-grid-view.c / grid-cell
 - 夹具:子项含 `archived: true` / `false` / `yes` / 字符串 `'true'` / 无 yaml 文件夹 / 普通文件
 - 矩阵(图标 + 列表 × 全未分组/混合/全分组):未分组在前无组头无徽章、`已归档` 组在后;图标视图每个归档项图标中央有"已归档"徽章;列表视图有整行组头
 - 退化用例:单子项且 `archived: true` → 徽章/组头必须出现(验证 sections-changed 补发)
-- 开关切换 → 中文名消失但分组与徽章保持(解耦);分组状态切排序 → 分区保持、组内跟随;改 yaml → 实时更新
+- 开关切换 → 描述消失但分组与徽章保持(解耦);分组状态切排序 → 分区保持、组内跟随;改 yaml → 实时更新
 - 徽章在亮/暗主题与浅色图标上的可读性;窗口任意宽度下分组语义一致
-- 回归:网络视图分区、列表 "group" 列、图标 caption name-zh
+- 回归:网络视图分区、列表 "group" 列、图标 caption desc
