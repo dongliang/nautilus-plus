@@ -53,12 +53,12 @@ fork 已独立成型:Plus 构建产出 `nautilus-plus`(独立应用 ID,与系统
 任何 C/Python 改动完成后,必须**本地安装到系统**,再打开 `plus/dev-demo/` 人工验收:
 
 1. **构建**:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false`(prefix 必须为 /usr,见 pitfalls.md 第 12 条;已配置时 `ninja -C build` 增量即可)
-2. **本地安装**:`pkexec ninja -C build install`(装 `/usr/bin/nautilus-plus` + 扩展 `/usr/share/nautilus-python/extensions/`)
+2. **本地安装**:`plus/dev/deploy.sh`(内部即 `pkexec ninja -C build install`,额外在安装前后临时备份书签文件、条目变少则还原,见 pitfalls #17)
 3. **打开**:`nautilus-plus plus/dev-demo`(fork 是独立应用 ID,与系统 nautilus 并行不冲突,无需退出系统实例;重启 fork 用 `nautilus-plus -q`)
 4. **验收内容**:`plus/dev-demo/` 含 `alpha-project`(desc + archived)、`beta-project`(仅 desc)、`gamma-project`(仅 archived)、`plain-dir`(无 yaml)、`notes.txt`(普通文件);分别用图标视图和列表视图检查描述显示与分组效果;再验空白处右键的「隐藏归档」及其汇总卡片
 5. 验收后如无遗留需求可退出窗口,不强制清理
 
 ## 安装到系统
 
-- fork 身份安装:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false && ninja -C build && pkexec ninja -C build install`,启动 `nautilus-plus`(设计见 `plus/docs/design/plus-identity.md`);新电脑先装依赖(`plus/README.md` 有完整清单)
+- fork 身份安装:`meson setup build --prefix=/usr -Dprofile=Plus -Ddocs=false && ninja -C build && plus/dev/deploy.sh`(等价于 `pkexec ninja -C build install`,外加书签兜底),启动 `nautilus-plus`(设计见 `plus/docs/design/plus-identity.md`);新电脑先装依赖(`plus/README.md` 有完整清单)
 - **Python 扩展随 install 自动装到 `/usr/share/nautilus-python/extensions/`**(Plus 构建,所有用户生效);开发迭代仍装 `~/.local/share/nautilus-python/extensions/`,两者同存会双菜单(pitfalls #5),系统装后删用户副本
