@@ -68,6 +68,10 @@ CAPTIONS_KEY = 'captions'
 ATTR = 'desc'
 # Per-file annotations live in a nested mapping of the same .folder.yaml.
 FILES_KEY = 'file-desc'
+# File annotations also travel inside the file itself, as an extended
+# attribute, so moving or renaming a file keeps them. The yaml stays the
+# human-facing source of truth; this is only the carrier.
+XATTR_KEY = 'user.nautilus-plus.desc'
 # Attribute name used before the rename to 'desc'; captions written by an
 # older build still carry it and are carried over on sight (see
 # _normalize_captions).
@@ -211,23 +215,8 @@ def _atomic_write(path, text, mode=None):
 
 # --- .folder.yaml --------------------------------------------------------
 
-def _yaml_data(folder_path):
-    """(desc, archived, file_descs) parsed from the folder's .folder.yaml.
-
-    Cached by mtime: this runs for every file in the folder, so the file
-    is parsed once per change, not once per item.
-    """
-    yaml_path = os.path.join(folder_path, YAML_NAME)
-    try:
-        mtime = os.path.getmtime(yaml_path)
-    except OSError:
-        _yaml_cache.pop(folder_path, None)
-        return (None, False, {})
-
-    hit = _yaml_cache.get(folder_path)
-    if hit is not None and hit[0] == mtime:
-        return (hit[1], hit[2], hit[3])
-
+def _parse_yaml(yaml_path):
+    """(desc, archived, file_descs) from one .folder.yaml."""
     desc = None
     archived = False
     file_descs = {}
@@ -251,10 +240,55 @@ def _yaml_data(folder_path):
                             file_descs[entry] = annotation.strip()
     except (yaml.YAMLError, UnicodeDecodeError, OSError, ValueError):
         pass
-    _yaml_cache[folder_path] = (mtime, desc, archived, file_descs)
+    return (desc, archived, file_descs)
+
+
+def _yaml_data(folder_path):
+    """(desc, archived, file_descs) parsed from the folder's .folder.yaml.
+
+    Cached by the yaml's and the folder's mtime: this runs for every file
+    in the folder, so it is parsed once per change, not once per item.
+    Annotations whose file is gone are dropped here — that is what keeps a
+    moved or deleted file from leaving a stale entry behind.
+    """
+    yaml_path = os.path.join(folder_path, YAML_NAME)
+    try:
+        yaml_mtime = os.path.getmtime(yaml_path)
+    except OSError:
+        _yaml_cache.pop(folder_path, None)
+        return (None, False, {})
+    try:
+        # A file appearing or disappearing is what makes an entry stale,
+        # and that is exactly what the directory mtime records.
+        dir_mtime = os.path.getmtime(folder_path)
+    except OSError:
+        dir_mtime = None
+
+    key = (yaml_mtime, dir_mtime)
+    hit = _yaml_cache.get(folder_path)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+
+    data = _parse_yaml(yaml_path)
+    stale = [entry for entry in data[2]
+             if not os.path.lexists(os.path.join(folder_path, entry))]
+    if stale:
+        try:
+            _drop_file_descs(folder_path, stale)
+        except (ValueError, OSError):
+            traceback.print_exc()
+        else:
+            try:
+                yaml_mtime = os.path.getmtime(yaml_path)
+            except OSError:
+                yaml_mtime = None
+            key = (yaml_mtime, dir_mtime)
+            data = _parse_yaml(yaml_path)
+
+    _yaml_cache[folder_path] = (key, data)
     if len(_yaml_cache) > 1024:
         _yaml_cache.pop(next(iter(_yaml_cache)))
-    return (desc, archived, file_descs)
+    return data
 
 
 def _yaml_info(folder_path):
@@ -465,6 +499,47 @@ def _remove_yaml_key(text, key):
     return _remove_from_mapping(text, node, key)
 
 
+def _read_token(path):
+    """The move token of a file: {"folder", "name", "desc"}, or None.
+
+    The recorded folder *and* name are what tell "the annotation arrived
+    with a moved or renamed file" apart from "the entry was deleted here
+    by hand" — the two cases look identical from the yaml alone.
+    """
+    try:
+        raw = os.getxattr(path, XATTR_KEY)
+    except OSError:
+        return None  # No token, or a filesystem without xattrs.
+    try:
+        token = json.loads(raw.decode('utf-8'))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return token if isinstance(token, dict) else None
+
+
+def _write_token(path, folder, name, value):
+    """Record where an annotation was written, next to the file itself."""
+    try:
+        payload = json.dumps({'folder': folder, 'name': name, 'desc': value})
+        os.setxattr(path, XATTR_KEY, payload.encode('utf-8'))
+    except (OSError, TypeError, ValueError):
+        pass  # Fat/network filesystems: annotations simply do not travel.
+
+
+def _clear_token(path):
+    try:
+        os.removexattr(path, XATTR_KEY)
+    except OSError:
+        pass
+
+
+def _token_matches(token, folder, name, value):
+    return (token is not None
+            and token.get('folder') == folder
+            and token.get('name') == name
+            and token.get('desc') == value)
+
+
 def _yaml_pair(name, value):
     """`<name>: <value>`, both sides quoted the way YAML requires.
 
@@ -534,6 +609,19 @@ def _remove_file_desc(text, filename):
         # Last annotation gone: the empty key goes with it.
         result = _remove_yaml_key(result, FILES_KEY)
     return result
+
+
+def _drop_file_descs(folder_path, names):
+    """Remove several annotations at once: one rewrite, not one per name."""
+    def update(text):
+        result = text
+        for name in names:
+            removed = _remove_file_desc(result, name)
+            if removed is not None:
+                result = removed
+        return result
+
+    _update_existing_yaml_file(folder_path, update)
 
 
 def _update_existing_yaml_file(folder_path, update):
@@ -756,6 +844,44 @@ def _local_file_target(file):
     return os.path.dirname(path), os.path.basename(path)
 
 
+def _resolve_annotation(path, folder, name):
+    """The annotation to show for one file, kept in step with its token.
+
+    The yaml is the source of truth; the token in the file's own extended
+    attribute is what lets an annotation follow the file to a new name or
+    a new folder.
+    """
+    annotation = _yaml_file_descs(folder).get(name)
+    token = _read_token(path)
+
+    if annotation is None:
+        if token is None:
+            return None
+        if token.get('folder') != folder or token.get('name') != name:
+            # The file was renamed or moved here: adopt the annotation into
+            # this folder's yaml, so it is grep-able and hand-editable again.
+            adopted = token.get('desc')
+            if not (isinstance(adopted, str) and adopted.strip()):
+                _clear_token(path)
+                return None
+            try:
+                _write_file_desc(folder, name, adopted)
+            except (ValueError, OSError):
+                traceback.print_exc()
+            else:
+                _yaml_cache.pop(folder, None)
+            # Record where it lives now, so the next refresh sees a match.
+            _write_token(path, folder, name, adopted)
+            return adopted
+        # Dropped here by hand: the token must not bring it back.
+        _clear_token(path)
+        return None
+
+    if not _token_matches(token, folder, name, annotation):
+        _write_token(path, folder, name, annotation)
+    return annotation
+
+
 def _apply(file):
     """Set/clear the desc and group extension attributes for one item.
 
@@ -769,8 +895,8 @@ def _apply(file):
         return
 
     if not file.is_directory():
-        annotation = _yaml_file_descs(
-            os.path.dirname(path)).get(os.path.basename(path))
+        annotation = _resolve_annotation(
+            path, os.path.dirname(path), os.path.basename(path))
         if _enabled() and annotation:
             file.add_string_attribute(ATTR, annotation)
             _shown.add(path)
@@ -1066,8 +1192,10 @@ class FolderMetaMenu(GObject.GObject, Nautilus.MenuProvider):
                 _write_file_desc(folder, filename, value)
             else:
                 # Empty input clears the annotation; an emptied file-desc
-                # mapping and an emptied yaml file both go with it.
+                # mapping and an emptied yaml file both go with it. The
+                # token goes too, or the next refresh would adopt it back.
                 _remove_file_desc_in_folder(folder, filename)
+                _clear_token(os.path.join(folder, filename))
             _yaml_cache.pop(folder, None)
             _apply(file)
             file.invalidate_extension_info()
